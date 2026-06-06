@@ -1,0 +1,111 @@
+@startuml aks-deployment
+!theme plain
+skinparam linetype ortho
+skinparam nodesep 40
+skinparam ranksep 60
+
+title AKS Deployment — Namespaces, Pods, Sidecars & External Providers
+
+node "AKS Cluster" {
+
+  node "Node Pool: system" as sys_pool {
+    node "Namespace: kube-system" as ns_sys {
+      component "OTel Collector\n[DaemonSet]" as otel_ds
+      component "Secrets Store\nCSI Driver\n[DaemonSet]" as csi_ds
+    }
+  }
+
+  node "Node Pool: workload" as work_pool {
+
+    node "Namespace: ingress" as ns_ingress {
+      component "Ingress Controller" as ingress
+    }
+
+    node "Namespace: atlas-gateway" as ns_gw {
+      component "gateway\n+ OTel agent\n+ CSI sidecar" as gw
+    }
+
+    node "Namespace: atlas-agents" as ns_agents {
+      component "agent-runtime\n+ OTel agent\n+ CSI sidecar" as agent
+    }
+
+    node "Namespace: atlas-mcp" as ns_mcp {
+      component "mcp-doc-search\n+ OTel agent\n+ CSI sidecar" as mcp_doc
+      component "mcp-citations\n+ OTel agent\n+ CSI sidecar" as mcp_cit
+    }
+
+    node "Namespace: atlas-frontend" as ns_fe {
+      component "frontend\n+ OTel agent\n+ CSI sidecar" as fe
+    }
+
+    node "Namespace: atlas-data" as ns_data {
+      component "qdrant" as qdrant
+      component "elasticsearch" as elastic
+    }
+
+    node "Namespace: atlas-kafka" as ns_kafka {
+      component "kafka\n(Strimzi or\nEvent Hubs proxy)" as kafka
+    }
+
+    node "Namespace: atlas-platform" as ns_platform {
+      component "mlflow\n+ OTel agent" as mlflow
+    }
+
+  }
+}
+
+cloud "Azure" as azure {
+  component "Key Vault" as kv
+  component "Azure PostgreSQL\nFlexible Server" as pg
+  component "Azure Cache\nfor Redis" as redis
+  component "Azure Blob\nStorage" as blob
+  component "Azure Event Hubs\n(Kafka endpoint)" as eventhubs
+  component "Azure Container\nRegistry (ACR)" as acr
+}
+
+cloud "Observability" as obs {
+  component "Splunk / SIEM" as splunk
+}
+
+' Ingress flow
+actor "Users / Internet" as users
+users --> ingress : HTTPS
+ingress --> gw
+ingress --> fe
+
+' Inter-service
+gw --> agent
+gw --> mcp_doc
+gw --> mcp_cit
+agent --> kafka
+agent --> pg
+agent --> redis
+mcp_doc --> elastic
+mcp_doc --> qdrant
+mcp_cit --> elastic
+
+' CSI secret mounts
+csi_ds ..> kv : "fetch secrets\n(Key Vault ref)"
+csi_ds ..> gw : "mount /mnt/secrets"
+csi_ds ..> agent : "mount /mnt/secrets"
+csi_ds ..> mcp_doc : "mount /mnt/secrets"
+csi_ds ..> mcp_cit : "mount /mnt/secrets"
+csi_ds ..> fe : "mount /mnt/secrets"
+
+' OTel telemetry
+otel_ds --> splunk : "traces / metrics / logs"
+gw --> otel_ds
+agent --> otel_ds
+mcp_doc --> otel_ds
+mcp_cit --> otel_ds
+mlflow --> otel_ds
+
+' Data plane
+agent --> blob : "artifacts / trace-archive"
+kafka --> eventhubs : "Kafka protocol"
+
+' Image pull
+acr --> work_pool : "image pull\n(kubelet MI)"
+acr --> sys_pool : "image pull\n(kubelet MI)"
+
+@enduml

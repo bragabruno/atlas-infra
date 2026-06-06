@@ -1,0 +1,33 @@
+# Terraform local state and working directories
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+
+# Variable files with real values — keep only .tfvars.example
+*.tfvars
+!*.tfvars.example
+
+# Lock file is intentionally kept (version pinning)
+# .terraform.lock.hcl
+
+# Terraform override files (local developer overrides)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Generated plan files
+*.tfplan
+
+# macOS metadata
+.DS_Store
+
+# Editor directories
+.idea/
+.vscode/
+
+# Environment variable files
+.env
+.env.*
+!.env.example
