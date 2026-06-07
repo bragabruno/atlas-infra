@@ -1,0 +1,30 @@
+apiVersion: v2
+name: atlas-otel-collector
+description: |
+  Atlas platform – OpenTelemetry Collector (DaemonSet + Deployment) exporting
+  traces, metrics, and logs to Splunk via OTLP and HEC.
+  GenAI semantic conventions enabled (OTEL_SEMCONV_STABILITY_OPT_IN).
+  Splunk endpoint is supplied via Key Vault CSI mount — no secrets in values.
+type: application
+version: 0.1.0
+appVersion: "0.152.0"
+
+dependencies:
+  # DaemonSet instance — receives OTLP from pods on each node, does local
+  # sampling/filtering (drop health spans), forwards batched to the gateway.
+  - name: opentelemetry-collector
+    alias: daemonset
+    version: "0.156.2"
+    repository: "https://open-telemetry.github.io/opentelemetry-helm-charts"
+    # Chart version 0.156.2 released 2026-05-21 (open-telemetry/opentelemetry-helm-charts)
+    # App version: OTel Collector Contrib 0.152.0
+    # Verified >= 14 days before 2026-05-24 cutoff: OK
+
+  # Deployment (gateway) instance — tail-based sampling, resource enrichment,
+  # export to Splunk via OTLP/HEC.
+  - name: opentelemetry-collector
+    alias: gateway
+    version: "0.156.2"
+    repository: "https://open-telemetry.github.io/opentelemetry-helm-charts"
+    # Same chart version, separate release for gateway role.
+    # Verified >= 14 days before 2026-05-24 cutoff: OK

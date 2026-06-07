@@ -1,0 +1,388 @@
+# ---------------------------------------------------------------------------
+# atlas-otel-collector — dev overrides
+#
+# Two collector releases share the same upstream chart (aliased):
+#   daemonset  — one pod per node; OTLP receiver → forward to gateway
+#   gateway    — Deployment; tail sampling + enrichment → Splunk
+#
+# Splunk endpoint and HEC token are NEVER placed here.
+# They are injected at pod startup via Key Vault CSI mount:
+#   /mnt/secrets/splunk-hec-endpoint   (HTTPS URL)
+#   /mnt/secrets/splunk-hec-token      (token — write-only)
+#
+# OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental must also be set
+# on every Atlas service pod (not the collector itself) to emit GenAI
+# semantic convention span attributes (gen_ai.*). It is listed here as a
+# reference and applied in each service's values file.
+# ---------------------------------------------------------------------------
+
+# ============================================================================
+# DaemonSet collector — receives OTLP from co-located pods, pre-filters,
+# batches, and forwards to the gateway collector.
+# ============================================================================
+daemonset:
+  mode: daemonset
+
+  # ---------------------------------------------------------------------------
+  # Image — use contrib distribution; core image lacks Splunk exporters
+  # ---------------------------------------------------------------------------
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.152.0"
+    pullPolicy: IfNotPresent
+
+  # ---------------------------------------------------------------------------
+  # Service account — annotated with Workload Identity client ID at deploy time
+  # (injected by CI via --set daemonset.serviceAccount.annotations.*)
+  # ---------------------------------------------------------------------------
+  serviceAccount:
+    create: true
+    annotations: {}
+    # azure.workload.identity/client-id: ""   # set by Terraform / CI
+
+  # ---------------------------------------------------------------------------
+  # GenAI semconv env var — set on the collector itself so its own internal
+  # telemetry also uses the latest conventions
+  # ---------------------------------------------------------------------------
+  extraEnvs:
+    - name: OTEL_SEMCONV_STABILITY_OPT_IN
+      value: "gen_ai_latest_experimental"
+
+  # ---------------------------------------------------------------------------
+  # Key Vault CSI — mount Splunk secrets (read-only access via MI)
+  # The gateway collector below does the actual Splunk export; the daemonset
+  # does NOT need the HEC token directly.
+  # ---------------------------------------------------------------------------
+  extraVolumes: []
+  extraVolumeMounts: []
+
+  # ---------------------------------------------------------------------------
+  # Resources — dev-sized (burstable node pool)
+  # ---------------------------------------------------------------------------
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # ---------------------------------------------------------------------------
+  # Presets
+  # ---------------------------------------------------------------------------
+  presets:
+    logsCollection:
+      enabled: true          # collect pod logs from /var/log/pods/*
+      includeCollectorLogs: false
+    kubernetesAttributes:
+      enabled: true          # enrich spans/logs with k8s.pod.*, k8s.namespace.*
+
+  # ---------------------------------------------------------------------------
+  # Collector pipeline config
+  #
+  # Receivers:  OTLP gRPC (pod → node loopback) + filelog (pod stdout/stderr)
+  # Processors: memory_limiter → batch → resource detection → k8sattributes
+  #             + filter (drop health-check spans)
+  # Exporters:  OTLP gRPC to gateway collector
+  # ---------------------------------------------------------------------------
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:4317
+          http:
+            endpoint: ${env:MY_POD_IP}:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+      batch:
+        send_batch_size: 1024
+        timeout: 5s
+      k8sattributes:
+        passthrough: false
+        extract:
+          metadata:
+            - k8s.pod.name
+            - k8s.pod.uid
+            - k8s.namespace.name
+            - k8s.node.name
+            - k8s.deployment.name
+          labels:
+            - tag_name: app.kubernetes.io/name
+              key: app.kubernetes.io/name
+              from: pod
+      # Drop health-check spans — keep signal clean, reduce HEC volume
+      filter:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["http.route"] == "/healthz"'
+            - 'attributes["http.route"] == "/readyz"'
+            - 'attributes["url.path"] == "/healthz"'
+            - 'attributes["url.path"] == "/readyz"'
+        logs:
+          log_record:
+            - 'IsMatch(body, ".*GET /healthz.*")'
+
+    exporters:
+      # Forward to gateway collector for tail-sampling and Splunk export
+      otlp/gateway:
+        endpoint: "atlas-otel-collector-gateway-opentelemetry-collector:4317"
+        tls:
+          insecure: true   # internal cluster traffic only
+
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+
+    service:
+      extensions:
+        - health_check
+      pipelines:
+        traces:
+          receivers:
+            - otlp
+          processors:
+            - memory_limiter
+            - k8sattributes
+            - filter
+            - batch
+          exporters:
+            - otlp/gateway
+        metrics:
+          receivers:
+            - otlp
+          processors:
+            - memory_limiter
+            - k8sattributes
+            - batch
+          exporters:
+            - otlp/gateway
+        logs:
+          receivers:
+            - otlp
+            - filelog
+          processors:
+            - memory_limiter
+            - k8sattributes
+            - filter
+            - batch
+          exporters:
+            - otlp/gateway
+
+# ============================================================================
+# Gateway (Deployment) collector — tail-based sampling, enrichment,
+# Splunk export via OTLP or HEC.
+#
+# Splunk secrets are injected from Key Vault via CSI mount.
+# Secret paths (read from env vars set from mounted files at runtime):
+#   SPLUNK_HEC_ENDPOINT  ← /mnt/secrets/splunk-hec-endpoint
+#   SPLUNK_HEC_TOKEN     ← /mnt/secrets/splunk-hec-token
+# ============================================================================
+gateway:
+  mode: deployment
+
+  replicaCount: 1   # dev: single replica; prod: 2+
+
+  image:
+    repository: otel/opentelemetry-collector-contrib
+    tag: "0.152.0"
+    pullPolicy: IfNotPresent
+
+  serviceAccount:
+    create: true
+    annotations: {}
+    # azure.workload.identity/client-id: ""   # set by Terraform / CI
+
+  extraEnvs:
+    - name: OTEL_SEMCONV_STABILITY_OPT_IN
+      value: "gen_ai_latest_experimental"
+    # The following env vars are populated at pod startup via an initContainer
+    # that reads CSI-mounted files and exports them as env vars.
+    # Actual values are NOT in this file — they come from Key Vault.
+    - name: SPLUNK_HEC_ENDPOINT
+      valueFrom:
+        secretKeyRef:
+          # Secrets Store CSI driver syncs KV secret to a K8s Secret;
+          # the K8s Secret name matches the SecretProviderClass objectAlias.
+          name: atlas-otel-splunk-secrets
+          key: splunk-hec-endpoint
+    - name: SPLUNK_HEC_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: atlas-otel-splunk-secrets
+          key: splunk-hec-token
+
+  # ---------------------------------------------------------------------------
+  # CSI volume — Key Vault secrets for Splunk endpoint + token
+  # The SecretProviderClass (atlas-otel-splunk-spc) is provisioned by the
+  # Terraform secrets module using the mi-atlas-otel-collector identity.
+  # No secret values appear here.
+  # ---------------------------------------------------------------------------
+  extraVolumes:
+    - name: splunk-secrets
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: atlas-otel-splunk-spc
+
+  extraVolumeMounts:
+    - name: splunk-secrets
+      mountPath: /mnt/secrets/splunk
+      readOnly: true
+
+  # ---------------------------------------------------------------------------
+  # Resources — gateway handles all batching; needs more headroom than daemonset
+  # ---------------------------------------------------------------------------
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+
+  presets:
+    kubernetesAttributes:
+      enabled: false   # daemonset already enriches; gateway just receives
+
+  # ---------------------------------------------------------------------------
+  # Collector pipeline config — gateway
+  #
+  # Receivers:  OTLP gRPC from daemonset collectors
+  # Processors: memory_limiter → resourcedetection → batch
+  #             + redaction (PII — strip prompt/completion text attributes)
+  # Exporters:  splunkhecexporter (traces→HEC, logs→HEC) +
+  #             otlphttp (metrics→OTLP/Splunk Observability Cloud)
+  # ---------------------------------------------------------------------------
+  config:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: ${env:MY_POD_IP}:4317
+          http:
+            endpoint: ${env:MY_POD_IP}:4318
+
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+      # Redact PII — raw prompt/completion text must not reach Splunk
+      # (policy: atlas-docs/04 §6.2, §6.5)
+      redaction:
+        allow_all_keys: true
+        blocked_values:
+          - ".*"           # catch-all pattern for gen_ai.prompt and gen_ai.completion
+        summary: silent
+        # Only block the known PII-carrying gen_ai attributes
+        blocked_keys:
+          - gen_ai.prompt
+          - gen_ai.completion
+          - gen_ai.request.messages
+          - gen_ai.response.messages
+      resourcedetection:
+        detectors:
+          - env
+          - azure
+        timeout: 5s
+        override: false
+      batch:
+        send_batch_size: 512
+        timeout: 10s
+
+    exporters:
+      # Splunk HEC exporter — traces and logs
+      splunk_hec/traces:
+        token: "${env:SPLUNK_HEC_TOKEN}"
+        endpoint: "${env:SPLUNK_HEC_ENDPOINT}"
+        source: "atlas-otel"
+        sourcetype: "otel:traces"
+        index: "atlas-traces"
+        tls:
+          insecure_skip_verify: false
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          num_consumers: 10
+          queue_size: 5000
+
+      splunk_hec/logs:
+        token: "${env:SPLUNK_HEC_TOKEN}"
+        endpoint: "${env:SPLUNK_HEC_ENDPOINT}"
+        source: "atlas-otel"
+        sourcetype: "otel:logs"
+        index: "atlas-logs"
+        tls:
+          insecure_skip_verify: false
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
+        sending_queue:
+          enabled: true
+          num_consumers: 10
+          queue_size: 5000
+
+      # OTLP HTTP — metrics to Splunk Observability Cloud (or OTLP-capable endpoint)
+      # Endpoint is the same Splunk HEC base URL with /v1/metrics path;
+      # configure per your Splunk Observability org endpoint.
+      otlphttp/metrics:
+        endpoint: "${env:SPLUNK_HEC_ENDPOINT}"
+        headers:
+          X-SF-Token: "${env:SPLUNK_HEC_TOKEN}"
+        tls:
+          insecure_skip_verify: false
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_elapsed_time: 300s
+
+    extensions:
+      health_check:
+        endpoint: ${env:MY_POD_IP}:13133
+
+    service:
+      extensions:
+        - health_check
+      pipelines:
+        traces:
+          receivers:
+            - otlp
+          processors:
+            - memory_limiter
+            - redaction
+            - resourcedetection
+            - batch
+          exporters:
+            - splunk_hec/traces
+        metrics:
+          receivers:
+            - otlp
+          processors:
+            - memory_limiter
+            - resourcedetection
+            - batch
+          exporters:
+            - otlphttp/metrics
+        logs:
+          receivers:
+            - otlp
+          processors:
+            - memory_limiter
+            - redaction
+            - resourcedetection
+            - batch
+          exporters:
+            - splunk_hec/logs
