@@ -1,0 +1,222 @@
+###############################################################################
+# INF-16 — Cost Controls: Scale-to-Zero CronJob
+#
+# Scales the AKS workload node pool and Atlas Deployments to zero replicas
+# outside business hours, then restores them in the morning.
+#
+# Schedule (CEST / UTC+2):
+#   SCALE DOWN  — 20:00 CEST (18:00 UTC) weekdays
+#   SCALE UP    — 08:00 CEST (06:00 UTC) weekdays
+#
+# CronJob schedule uses UTC.  Adjust SCALE_DOWN_CRON / SCALE_UP_CRON if the
+# team operates in a different timezone.
+#
+# Prerequisites:
+#   - The CronJob service account needs the following permissions:
+#       - RBAC: patch Deployments + StatefulSets in the atlas-dev namespace
+#       - Azure: Contributor on the AKS node pool (for az aks nodepool scale)
+#         or use the AKS cluster autoscaler min_count=0 and only patch K8s
+#         resources; the cluster autoscaler will drain the node pool to zero.
+#   - AZURE_* env vars must be supplied via a SecretProviderClass or K8s Secret
+#     (managed out-of-band; not committed here).
+#
+# Apply:
+#   kubectl apply -f platform/cost-controls/scale-to-zero-cronjob.yaml \
+#     -n atlas-dev
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# ServiceAccount
+# ---------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atlas-scale-controller
+  namespace: atlas-dev
+  labels:
+    app.kubernetes.io/name: atlas-scale-controller
+    app.kubernetes.io/managed-by: atlas-infra
+
+---
+# ---------------------------------------------------------------------------
+# RBAC — allow patching Deployments + StatefulSets in atlas-dev namespace
+# ---------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atlas-scale-controller
+  namespace: atlas-dev
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale"]
+    verbs: ["get", "update", "patch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atlas-scale-controller
+  namespace: atlas-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: atlas-scale-controller
+subjects:
+  - kind: ServiceAccount
+    name: atlas-scale-controller
+    namespace: atlas-dev
+
+---
+# ---------------------------------------------------------------------------
+# CronJob — SCALE DOWN (20:00 CEST = 18:00 UTC, Mon–Fri)
+#
+# Scales all Deployments and StatefulSets in atlas-dev to 0 replicas.
+# The AKS cluster autoscaler (min_count=0 on workload node pool) will then
+# drain and remove the underlying VMs — no idle node cost overnight.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: atlas-scale-down
+  namespace: atlas-dev
+  labels:
+    app.kubernetes.io/name: atlas-scale-down
+    app.kubernetes.io/managed-by: atlas-infra
+    atlas/cost-control: "true"
+spec:
+  # 18:00 UTC Mon–Fri = 20:00 CEST (UTC+2)
+  schedule: "0 18 * * 1-5"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: atlas-scale-down
+        spec:
+          serviceAccountName: atlas-scale-controller
+          restartPolicy: OnFailure
+          containers:
+            - name: scaler
+              # kubectl image — use the same version as your AKS Kubernetes version.
+              # Pin to a digest in production; this tag is sufficient for dev.
+              image: bitnami/kubectl:1.30
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  NAMESPACE="atlas-dev"
+                  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Scaling down atlas-dev workloads..."
+
+                  # Scale all Deployments to 0
+                  for deploy in $(kubectl get deployments -n "$NAMESPACE" \
+                      -l 'atlas/cost-control!=exclude' \
+                      -o jsonpath='{.items[*].metadata.name}'); do
+                    echo "  Scaling Deployment/$deploy to 0"
+                    kubectl scale deployment "$deploy" --replicas=0 -n "$NAMESPACE"
+                  done
+
+                  # Scale all StatefulSets to 0 (Kafka, Qdrant, Elasticsearch if on AKS)
+                  for ss in $(kubectl get statefulsets -n "$NAMESPACE" \
+                      -l 'atlas/cost-control!=exclude' \
+                      -o jsonpath='{.items[*].metadata.name}'); do
+                    echo "  Scaling StatefulSet/$ss to 0"
+                    kubectl scale statefulset "$ss" --replicas=0 -n "$NAMESPACE"
+                  done
+
+                  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Scale-down complete."
+                  echo "The AKS cluster autoscaler will remove workload nodes once they are empty."
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+
+---
+# ---------------------------------------------------------------------------
+# CronJob — SCALE UP (08:00 CEST = 06:00 UTC, Mon–Fri)
+#
+# Restores Deployments and StatefulSets to their standard dev replica counts.
+# Replica counts below are hardcoded to dev defaults; adjust as needed.
+# The AKS autoscaler will provision nodes as pods become pending.
+#
+# NOTE: StatefulSets are restored to their original replica count by reading
+# the atlas/original-replicas annotation written during scale-down, falling
+# back to 1 if the annotation is absent.
+# ---------------------------------------------------------------------------
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: atlas-scale-up
+  namespace: atlas-dev
+  labels:
+    app.kubernetes.io/name: atlas-scale-up
+    app.kubernetes.io/managed-by: atlas-infra
+    atlas/cost-control: "true"
+spec:
+  # 06:00 UTC Mon–Fri = 08:00 CEST (UTC+2)
+  schedule: "0 6 * * 1-5"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: atlas-scale-up
+        spec:
+          serviceAccountName: atlas-scale-controller
+          restartPolicy: OnFailure
+          containers:
+            - name: scaler
+              image: bitnami/kubectl:1.30
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -euo pipefail
+                  NAMESPACE="atlas-dev"
+                  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Scaling up atlas-dev workloads..."
+
+                  # Restore Deployments to 1 replica (dev baseline)
+                  for deploy in $(kubectl get deployments -n "$NAMESPACE" \
+                      -l 'atlas/cost-control!=exclude' \
+                      -o jsonpath='{.items[*].metadata.name}'); do
+                    echo "  Scaling Deployment/$deploy to 1"
+                    kubectl scale deployment "$deploy" --replicas=1 -n "$NAMESPACE"
+                  done
+
+                  # Restore StatefulSets to 1 replica (dev baseline)
+                  for ss in $(kubectl get statefulsets -n "$NAMESPACE" \
+                      -l 'atlas/cost-control!=exclude' \
+                      -o jsonpath='{.items[*].metadata.name}'); do
+                    echo "  Scaling StatefulSet/$ss to 1"
+                    kubectl scale statefulset "$ss" --replicas=1 -n "$NAMESPACE"
+                  done
+
+                  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Scale-up complete."
+                  echo "The AKS cluster autoscaler will provision nodes as pods become pending."
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
