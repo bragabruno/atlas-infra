@@ -1,0 +1,247 @@
+# ---------------------------------------------------------------------------
+# atlas-infra/skaffold.yaml — INF-15
+#
+# Umbrella Skaffold config for the Atlas polyrepo dev loop.
+# Chosen tool: Skaffold (ADR-019) — Helm-native, declarative, mirrors the
+# Argo Rollouts/Helm CD path exactly.
+#
+# LAYOUT
+# ------
+# Each service repo is checked out as a sibling of atlas-infra:
+#
+#   Atlas/
+#   ├── atlas-infra/          ← this repo (skaffold.yaml lives here)
+#   ├── atlas-gateway/
+#   ├── atlas-agent-runtime/
+#   ├── atlas-mcp-doc-search/
+#   ├── atlas-mcp-citations/
+#   └── atlas-frontend/
+#
+# USAGE
+# ------
+# Inner dev loop (file-watch + auto rebuild):
+#   skaffold dev --profile=dev --namespace=atlas-dev
+#
+# One-shot deploy (equivalent to `make cloud-up ENV=dev`):
+#   skaffold run --profile=dev --namespace=atlas-dev
+#
+# Tear down:
+#   skaffold delete --profile=dev --namespace=atlas-dev
+#
+# REQUIREMENTS
+# ------------
+# - kubectl context atlas-dev must exist and point to the AKS dev cluster.
+# - ACR login: az acr login --name <acr-name> (or AKS kubelet MI handles pulls).
+# - All sibling repos must be cloned at the paths shown above.
+# - Secrets Store CSI provider and SecretProviderClasses must be deployed
+#   by Terraform before running this. No secrets live here.
+# ---------------------------------------------------------------------------
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: atlas
+
+# ---------------------------------------------------------------------------
+# Build — each service image built from its sibling repo context and pushed
+# to ACR. AKS pulls from ACR via the acrPull role (no docker credentials
+# needed in pods).
+#
+# Tag policy: gitCommit — image tag = short git SHA of the service repo HEAD.
+# ACR_LOGIN_SERVER must be set in the environment or overridden via
+# --default-repo flag.  Example: acratlas<env>.azurecr.io
+# ---------------------------------------------------------------------------
+build:
+  tagPolicy:
+    gitCommit:
+      ignoreChanges: false   # tag reflects exact source commit
+
+  local:
+    push: true               # push to ACR; AKS nodes pull from there
+    tryImportMissing: false
+    useBuildkit: true
+
+  artifacts:
+    # -----------------------------------------------------------------------
+    # atlas-gateway
+    # -----------------------------------------------------------------------
+    - image: acr.azurecr.io/atlas/gateway
+      context: ../atlas-gateway
+      docker:
+        dockerfile: Dockerfile
+        buildArgs:
+          GIT_SHA: "{{.DIGEST}}"
+
+    # -----------------------------------------------------------------------
+    # atlas-agent-runtime
+    # -----------------------------------------------------------------------
+    - image: acr.azurecr.io/atlas/agent-runtime
+      context: ../atlas-agent-runtime
+      docker:
+        dockerfile: Dockerfile
+        buildArgs:
+          GIT_SHA: "{{.DIGEST}}"
+
+    # -----------------------------------------------------------------------
+    # atlas-mcp-doc-search
+    # -----------------------------------------------------------------------
+    - image: acr.azurecr.io/atlas/mcp-doc-search
+      context: ../atlas-mcp-doc-search
+      docker:
+        dockerfile: Dockerfile
+        buildArgs:
+          GIT_SHA: "{{.DIGEST}}"
+
+    # -----------------------------------------------------------------------
+    # atlas-mcp-citations
+    # -----------------------------------------------------------------------
+    - image: acr.azurecr.io/atlas/mcp-citations
+      context: ../atlas-mcp-citations
+      docker:
+        dockerfile: Dockerfile
+        buildArgs:
+          GIT_SHA: "{{.DIGEST}}"
+
+    # -----------------------------------------------------------------------
+    # atlas-frontend (nginx static SPA)
+    # -----------------------------------------------------------------------
+    - image: acr.azurecr.io/atlas/frontend
+      context: ../atlas-frontend
+      docker:
+        dockerfile: Dockerfile
+        buildArgs:
+          GIT_SHA: "{{.DIGEST}}"
+
+# ---------------------------------------------------------------------------
+# Deploy — each service uses its own repo's deploy/ Helm chart, with the
+# dev values file layered on top of defaults.
+#
+# image.tag is injected by Skaffold at deploy time using the build output
+# digest — each service gets the exact image it just built.
+# ---------------------------------------------------------------------------
+manifests:
+  helm:
+    releases:
+      # -----------------------------------------------------------------------
+      # atlas-gateway
+      # -----------------------------------------------------------------------
+      - name: gateway
+        chartPath: ../atlas-gateway/deploy
+        valuesFiles:
+          - ../atlas-gateway/deploy/values.yaml
+          - ../atlas-gateway/deploy/values-dev.yaml
+        setValues:
+          image.repository: acr.azurecr.io/atlas/gateway
+        setValueTemplates:
+          image.tag: "{{.IMAGE_TAG_atlas_gateway}}"
+        namespace: atlas-dev
+        createNamespace: true
+        wait: true
+        upgradeOnChange: true
+
+      # -----------------------------------------------------------------------
+      # atlas-agent-runtime
+      # -----------------------------------------------------------------------
+      - name: agent-runtime
+        chartPath: ../atlas-agent-runtime/deploy
+        valuesFiles:
+          - ../atlas-agent-runtime/deploy/values.yaml
+          - ../atlas-agent-runtime/deploy/values-dev.yaml
+        setValues:
+          image.repository: acr.azurecr.io/atlas/agent-runtime
+        setValueTemplates:
+          image.tag: "{{.IMAGE_TAG_atlas_agent_runtime}}"
+        namespace: atlas-dev
+        createNamespace: true
+        wait: true
+        upgradeOnChange: true
+
+      # -----------------------------------------------------------------------
+      # atlas-mcp-doc-search
+      # -----------------------------------------------------------------------
+      - name: mcp-doc-search
+        chartPath: ../atlas-mcp-doc-search/deploy
+        valuesFiles:
+          - ../atlas-mcp-doc-search/deploy/values.yaml
+          - ../atlas-mcp-doc-search/deploy/values-dev.yaml
+        setValues:
+          image.repository: acr.azurecr.io/atlas/mcp-doc-search
+        setValueTemplates:
+          image.tag: "{{.IMAGE_TAG_atlas_mcp_doc_search}}"
+        namespace: atlas-dev
+        createNamespace: true
+        wait: true
+        upgradeOnChange: true
+
+      # -----------------------------------------------------------------------
+      # atlas-mcp-citations
+      # -----------------------------------------------------------------------
+      - name: mcp-citations
+        chartPath: ../atlas-mcp-citations/deploy
+        valuesFiles:
+          - ../atlas-mcp-citations/deploy/values.yaml
+          - ../atlas-mcp-citations/deploy/values-dev.yaml
+        setValues:
+          image.repository: acr.azurecr.io/atlas/mcp-citations
+        setValueTemplates:
+          image.tag: "{{.IMAGE_TAG_atlas_mcp_citations}}"
+        namespace: atlas-dev
+        createNamespace: true
+        wait: true
+        upgradeOnChange: true
+
+      # -----------------------------------------------------------------------
+      # atlas-frontend
+      # -----------------------------------------------------------------------
+      - name: frontend
+        chartPath: ../atlas-frontend/deploy
+        valuesFiles:
+          - ../atlas-frontend/deploy/values.yaml
+          - ../atlas-frontend/deploy/values-dev.yaml
+        setValues:
+          image.repository: acr.azurecr.io/atlas/frontend
+        setValueTemplates:
+          image.tag: "{{.IMAGE_TAG_atlas_frontend}}"
+        namespace: atlas-dev
+        createNamespace: true
+        wait: true
+        upgradeOnChange: true
+
+# ---------------------------------------------------------------------------
+# Profiles
+# ---------------------------------------------------------------------------
+profiles:
+  # -------------------------------------------------------------------------
+  # dev — bound to the atlas-dev kube-context (AKS dev cluster)
+  #
+  # Activation: this profile is automatically active when the current
+  # kube-context is atlas-dev. Force it explicitly with --profile=dev.
+  #
+  # What changes from the default:
+  #   - kubeContext is locked to atlas-dev (prevents accidental prod deploys)
+  #   - Each release overrides to values-dev.yaml (dev-sized resources, 1 replica)
+  # -------------------------------------------------------------------------
+  - name: dev
+    activation:
+      - kubeContext: atlas-dev
+
+    deploy:
+      kubeContext: atlas-dev
+
+    # Per-profile Helm overrides reinforce dev sizing even if the base
+    # values files are missing or their defaults are too large.
+    patches:
+      - op: replace
+        path: /manifests/helm/releases/0/setValues/replicaCount
+        value: "1"
+      - op: replace
+        path: /manifests/helm/releases/1/setValues/replicaCount
+        value: "1"
+      - op: replace
+        path: /manifests/helm/releases/2/setValues/replicaCount
+        value: "1"
+      - op: replace
+        path: /manifests/helm/releases/3/setValues/replicaCount
+        value: "1"
+      - op: replace
+        path: /manifests/helm/releases/4/setValues/replicaCount
+        value: "1"

@@ -1,0 +1,193 @@
+# ---------------------------------------------------------------------------
+# atlas-mlflow — dev overrides
+#
+# Backend store:  Azure Database for PostgreSQL Flexible Server
+#                 Provisioned by infra/terraform/modules/data.
+#                 FQDN reference: modules/data output pg_fqdn.
+#                 Credentials are NEVER in this file — injected via CSI mount
+#                 from Key Vault (/mnt/secrets/mlflow/pg-host,
+#                 /mnt/secrets/mlflow/pg-user, /mnt/secrets/mlflow/pg-password).
+#
+# Artifact store: Azure Blob Storage — container "artifacts"
+#                 Provisioned by infra/terraform/modules/storage.
+#                 Storage account reference: modules/storage output storage_account_name.
+#                 Authentication via mi-atlas-mlflow Workload Identity
+#                 (Storage Blob Data Contributor role — no connection string needed).
+#
+# See atlas-docs/04 §6.3 (MLflow tracking) and README for install steps.
+# ---------------------------------------------------------------------------
+
+mlflow:
+  # ---------------------------------------------------------------------------
+  # Replica count — single pod sufficient for Atlas scale (eval + Gate 2 only)
+  # ---------------------------------------------------------------------------
+  replicaCount: 1
+
+  # ---------------------------------------------------------------------------
+  # Image — community-charts wraps burakince/mlflow which mirrors the official
+  # MLflow Docker image; pinned to chart appVersion 3.7.0
+  # ---------------------------------------------------------------------------
+  image:
+    repository: burakince/mlflow
+    tag: "3.7.0"
+    pullPolicy: IfNotPresent
+
+  # ---------------------------------------------------------------------------
+  # Service account — annotated with Workload Identity MI client ID at deploy
+  # time (injected by CI via --set mlflow.serviceAccount.annotations.*)
+  # ---------------------------------------------------------------------------
+  serviceAccount:
+    create: true
+    annotations: {}
+    # azure.workload.identity/client-id: ""   # set by Terraform / CI output
+
+  # ---------------------------------------------------------------------------
+  # Pod labels for Workload Identity webhook injection
+  # ---------------------------------------------------------------------------
+  podLabels:
+    azure.workload.identity/use: "true"
+
+  # ---------------------------------------------------------------------------
+  # Backend store — PostgreSQL Flexible Server (modules/data)
+  #
+  # host, user, password are all read from Key Vault CSI mount at pod startup.
+  # We use the chart's extraEnvVars feature to populate MLFLOW_BACKEND_STORE_URI
+  # from mounted secret files via an init container trick (see extraVolumes).
+  #
+  # backendStore.postgres.enabled is intentionally left false; instead, we pass
+  # MLFLOW_BACKEND_STORE_URI directly so the password never has to appear in a
+  # chart-rendered ConfigMap.
+  # ---------------------------------------------------------------------------
+  backendStore:
+    databaseMigration: true          # run Alembic migrations on pod start
+    databaseConnectionCheck: true    # wait for PG before starting server
+    postgres:
+      enabled: false                 # disabled: URI constructed from env vars below
+
+  # ---------------------------------------------------------------------------
+  # Artifact store — Azure Blob Storage (modules/storage)
+  #
+  # Authentication is via Workload Identity (DefaultAzureCredential in the
+  # MLflow Azure Blob artifact store driver). No connection string or access
+  # key is required when the pod runs under mi-atlas-mlflow with the
+  # Storage Blob Data Contributor role.
+  #
+  # Container name: "artifacts" (provisioned by modules/storage).
+  # Storage account name: injected via env var from Key Vault CSI mount
+  # (/mnt/secrets/mlflow/storage-account-name) — modules/storage output.
+  # ---------------------------------------------------------------------------
+  artifactRoot:
+    proxiedArtifactStorage: false
+    azureBlob:
+      enabled: true
+      # Container name is fixed — created by infra/terraform/modules/storage
+      container: "artifacts"
+      # storageAccount and path are set via env var AZURE_STORAGE_ACCOUNT
+      # which is populated from the Key Vault CSI mount below.
+      # Leave these blank — the MLflow Azure backend reads AZURE_STORAGE_ACCOUNT
+      # from the environment (set via extraEnvVars / initContainers below).
+      storageAccount: ""
+      path: "mlflow"
+      # No connection string or access key — Workload Identity is used.
+      connectionString: ""
+      accessKey: ""
+
+  # ---------------------------------------------------------------------------
+  # Extra env vars — MLFLOW_BACKEND_STORE_URI + AZURE_STORAGE_ACCOUNT
+  #
+  # Both values are read from Key Vault via CSI-mounted files at pod start.
+  # The initContainer (see initContainers below) reads the mounted files and
+  # writes them as env-file entries that the main container sources.
+  # Kubernetes `secretKeyRef` is used (Secrets Store CSI syncs KV secrets
+  # to a native K8s Secret object via secretObjects in the SecretProviderClass).
+  # ---------------------------------------------------------------------------
+  extraEnvVars:
+    # PostgreSQL connection URI — host:port/db?sslmode=require
+    # Value assembled from individual KV secrets by the initContainer.
+    - name: MLFLOW_BACKEND_STORE_URI
+      valueFrom:
+        secretKeyRef:
+          name: atlas-mlflow-pg-uri
+          key: pg-uri          # synced from KV secret "mlflow-pg-uri"
+
+    # Azure Storage account name (no key — MI handles auth)
+    - name: AZURE_STORAGE_ACCOUNT
+      valueFrom:
+        secretKeyRef:
+          name: atlas-mlflow-storage-secrets
+          key: storage-account-name   # synced from KV secret "mlflow-storage-account-name"
+
+    # Force MLflow to use the Azure Blob artifact store driver
+    - name: MLFLOW_ARTIFACTS_DESTINATION
+      value: ""   # blank: derived from artifactRoot.azureBlob settings above
+
+  # ---------------------------------------------------------------------------
+  # CSI volumes — Key Vault secrets for PG URI + storage account name
+  # SecretProviderClasses are provisioned by infra/terraform/modules/secrets
+  # using the mi-atlas-mlflow managed identity.
+  # ---------------------------------------------------------------------------
+  extraVolumes:
+    - name: mlflow-pg-secrets
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: atlas-mlflow-pg-spc
+    - name: mlflow-storage-secrets
+      csi:
+        driver: secrets-store.csi.k8s.io
+        readOnly: true
+        volumeAttributes:
+          secretProviderClass: atlas-mlflow-storage-spc
+
+  extraVolumeMounts:
+    - name: mlflow-pg-secrets
+      mountPath: /mnt/secrets/mlflow/pg
+      readOnly: true
+    - name: mlflow-storage-secrets
+      mountPath: /mnt/secrets/mlflow/storage
+      readOnly: true
+
+  # ---------------------------------------------------------------------------
+  # Service
+  # ---------------------------------------------------------------------------
+  service:
+    type: ClusterIP
+    port: 5000
+
+  # ---------------------------------------------------------------------------
+  # Resources — dev-sized (single eval runner + Gate 2 traffic only)
+  # ---------------------------------------------------------------------------
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+  # ---------------------------------------------------------------------------
+  # Auth — disabled in dev (internal ClusterIP only)
+  # Production: enable basic auth or LDAP; pass credentials via Key Vault CSI
+  # ---------------------------------------------------------------------------
+  auth:
+    enabled: false
+
+  # ---------------------------------------------------------------------------
+  # MLflow Flask server secret key
+  # Left empty — chart auto-generates one; for prod supply via KV CSI mount.
+  # ---------------------------------------------------------------------------
+  flaskServerSecretKey: ""
+
+  # ---------------------------------------------------------------------------
+  # Ingress — disabled in dev (port-forward for UI access)
+  # ---------------------------------------------------------------------------
+  ingress:
+    enabled: false
+
+  # ---------------------------------------------------------------------------
+  # Persistence — MLflow itself is stateless; state lives in PG + Blob.
+  # Disable any ephemeral local storage that might confuse the artifact paths.
+  # ---------------------------------------------------------------------------
+  persistence:
+    enabled: false

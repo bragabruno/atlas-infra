@@ -1,0 +1,18 @@
+apiVersion: v2
+name: atlas-mlflow
+description: |
+  Atlas platform – MLflow tracking server.
+  Backend store: Azure Database for PostgreSQL Flexible Server (modules/data).
+  Artifact store: Azure Blob Storage container "artifacts" (modules/storage).
+  Credentials are never in values — injected via Key Vault CSI + Workload Identity.
+type: application
+version: 0.1.0
+appVersion: "3.7.0"
+
+dependencies:
+  - name: mlflow
+    version: "1.8.1"
+    repository: "https://community-charts.github.io/helm-charts"
+    # Chart version 1.8.1 released 2025-12-07 (community-charts/helm-charts)
+    # App version: MLflow 3.7.0
+    # Verified >= 14 days before 2026-05-24 cutoff: OK
