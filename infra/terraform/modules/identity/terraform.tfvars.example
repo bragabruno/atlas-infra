@@ -1,0 +1,42 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — NEVER commit real values.
+
+resource_group_name = "atlas-dev-rg"
+location            = "westeurope"
+
+# From aks module output: module.aks.oidc_issuer_url
+oidc_issuer_url      = "https://eastus.oic.prod-aks.azure.com/<tenant>/<cluster-oidc-guid>/"
+kubernetes_namespace = "atlas"
+
+services = {
+  # API gateway: read secrets from Key Vault, read blobs (golden-sets)
+  gateway = {
+    role_assignments = [
+      { role_definition_name = "Key Vault Secrets User",    scope = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<kv-name>" },
+      { role_definition_name = "Storage Blob Data Reader",  scope = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<sa-name>" },
+    ]
+  }
+
+  # Eval runner: read/write blobs (trace-archive, artifacts)
+  eval-runner = {
+    role_assignments = [
+      { role_definition_name = "Key Vault Secrets User",         scope = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<kv-name>" },
+      { role_definition_name = "Storage Blob Data Contributor",  scope = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Storage/storageAccounts/<sa-name>" },
+    ]
+  }
+
+  # Ingestion service: publish to Event Hubs (Kafka endpoint)
+  ingestion = {
+    role_assignments = [
+      { role_definition_name = "Key Vault Secrets User",   scope = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.KeyVault/vaults/<kv-name>" },
+      { role_definition_name = "Azure Event Hubs Data Sender", scope = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.EventHub/namespaces/<eh-namespace>" },
+    ]
+  }
+}
+
+tags = {
+  project    = "atlas"
+  managed-by = "terraform"
+  module     = "identity"
+  env        = "dev"
+}
