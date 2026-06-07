@@ -1,0 +1,52 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — NEVER commit real values.
+
+resource_group_name = "atlas-dev-rg"
+location            = "westeurope"
+
+# Subnet and VNet — from network module outputs
+subnet_workload_id = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/atlas-vnet/subnets/workload"
+vnet_id            = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/atlas-vnet"
+
+# Storage Account — must be globally unique, lowercase alphanumeric, 3–24 chars
+storage_account_name             = "atlasdev<unique-suffix>"
+storage_account_replication_type = "LRS"
+storage_account_tier             = "Standard"
+blob_versioning_enabled          = true
+blob_delete_retention_days       = 7
+container_delete_retention_days  = 7
+
+# Blob containers — defaults match Atlas README (golden-sets, trace-archive, artifacts)
+blob_containers = {
+  golden-sets = {
+    access_type           = "private"
+    lifecycle_tier_days   = 90
+    lifecycle_delete_days = 0
+  }
+  trace-archive = {
+    access_type           = "private"
+    lifecycle_tier_days   = 30
+    lifecycle_delete_days = 365
+  }
+  artifacts = {
+    access_type           = "private"
+    lifecycle_tier_days   = 90
+    lifecycle_delete_days = 730
+  }
+}
+
+# Azure Container Registry — Premium required for scan-on-push + private endpoint
+acr_name                          = "atlasdev<unique-suffix>"
+acr_sku                           = "Premium"
+acr_admin_enabled                 = false
+acr_public_network_access_enabled = false
+acr_quarantine_policy_enabled     = true
+acr_retention_policy_days         = 30
+acr_trust_policy_enabled          = false
+
+tags = {
+  project    = "atlas"
+  managed-by = "terraform"
+  module     = "storage"
+  env        = "dev"
+}

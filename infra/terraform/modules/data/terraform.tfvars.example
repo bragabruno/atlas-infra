@@ -1,0 +1,41 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — NEVER commit real values.
+
+resource_group_name = "atlas-dev-rg"
+location            = "westeurope"
+
+# Subnet and VNet — from network module outputs
+subnet_data_id = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/atlas-vnet/subnets/data"
+vnet_id        = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/atlas-vnet"
+
+# PostgreSQL Flexible Server — dev (burstable, single-AZ)
+pg_server_name                  = "atlas-pg-dev-<unique-suffix>"
+pg_version                      = "16"
+pg_sku_name                     = "B_Standard_B1ms"
+pg_storage_mb                   = 32768
+pg_storage_tier                 = "P4"
+pg_admin_username               = "atlasadmin"
+pg_backup_retention_days        = 7
+pg_geo_redundant_backup_enabled = false
+
+pg_databases = {
+  atlas = {
+    charset   = "UTF8"
+    collation = "en_US.utf8"
+  }
+}
+
+# Redis Cache — Basic C0 dev tier
+redis_name              = "atlas-redis-dev-<unique-suffix>"
+redis_capacity          = 0
+redis_family            = "C"
+redis_sku_name          = "Basic"
+redis_non_ssl_port_enabled = false
+redis_minimum_tls_version = "1.2"
+
+tags = {
+  project    = "atlas"
+  managed-by = "terraform"
+  module     = "data"
+  env        = "dev"
+}
