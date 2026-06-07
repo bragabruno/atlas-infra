@@ -1,0 +1,13 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — NEVER commit real values.
+
+location             = "westeurope"
+resource_group_name  = "atlas-tfstate-rg"
+storage_account_name = "atlastfstate<suffix>"   # must be globally unique, 3-24 chars
+container_name       = "tfstate"
+
+tags = {
+  project    = "atlas"
+  managed-by = "terraform-bootstrap"
+  env        = "shared"
+}
