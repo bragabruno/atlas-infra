@@ -106,6 +106,28 @@ Pod (K8s ServiceAccount)
 
 ---
 
+## Testing & Policy (ADR-019)
+
+Terraform is gated in CI on both correctness and security:
+
+| Concern | Tool | Notes |
+|---|---|---|
+| Module-logic tests | **`terraform test`** (native, 1.6+) | HCL `.tftest.hcl` alongside each module; validates without deploying |
+| Security / compliance | **Checkov** | CIS/GDPR/PCI policies; also scans Helm/K8s; Python-native |
+| Linting | **TFLint** | provider-specific mistakes, deprecated syntax, unused declarations |
+| IaC vuln scan | **Trivy** (`trivy config`) | maintained successor to tfsec |
+| Real-deploy integration | **Terratest** (Go) | reserved for the top 1–2 critical modules only (avoids a Go barrier elsewhere) |
+
+Providers and Helm chart versions are pinned exactly (`versions.tf`, `Chart.yaml`).
+
+---
+
+## Local Dev Loop (ADR-019, INF-15)
+
+The umbrella inner-loop tool is **Skaffold** — Helm-native and declarative, paralleling the Argo Rollouts/Helm CD path (build → ACR → Helm → AKS across the polyrepo). No local Docker Compose target; the dev loop runs against AKS. (Tilt was evaluated for its richer live-reload DX and remains a defensible alternative.)
+
+---
+
 ## Diagrams
 
 | Diagram | Path |
