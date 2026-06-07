@@ -1,0 +1,55 @@
+strimzi-kafka-operator:
+  # ---------------------------------------------------------------------------
+  # Operator scope — watch only the atlas-dev namespace (least-privilege)
+  # ---------------------------------------------------------------------------
+  watchNamespaces:
+    - atlas-dev
+
+  # ---------------------------------------------------------------------------
+  # Resources — dev-sized
+  # ---------------------------------------------------------------------------
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+  # ---------------------------------------------------------------------------
+  # Disable features unused in dev to reduce resource footprint
+  # ---------------------------------------------------------------------------
+  featureGates: ""
+
+  # ---------------------------------------------------------------------------
+  # Log level
+  # ---------------------------------------------------------------------------
+  logLevel: INFO
+
+  # ---------------------------------------------------------------------------
+  # replicas — single operator pod in dev
+  # ---------------------------------------------------------------------------
+  replicas: 1
+
+# ---------------------------------------------------------------------------
+# Atlas-specific: whether to deploy the Kafka CR (single-node cluster) or
+# use Azure Event Hubs (recommended for dev — zero cluster management).
+#
+# Set deployKafkaCluster=false when using Event Hubs. In that case only the
+# Strimzi operator is installed to manage KafkaTopic CRs; the Kafka CR itself
+# is not created and the Event Hubs connection string is injected at runtime
+# via Key Vault CSI (no secrets in this chart).
+# ---------------------------------------------------------------------------
+deployKafkaCluster: true   # flip to false for Event Hubs path
+
+kafkaCluster:
+  name: atlas
+  namespace: atlas-dev
+  replicas: 1              # dev: single broker
+  kafkaVersion: "4.1.2"   # Kafka version supported by Strimzi 1.0.0 (4.1.0, 4.1.1, 4.1.2, 4.2.0)
+  storage:
+    type: persistent-claim
+    size: 10Gi
+    deleteClaim: true      # clean up PVC on cluster deletion (dev only)
+  # Note: Strimzi 1.0.0 uses KRaft mode (no ZooKeeper). The kafka-cluster.yaml
+  # template sets strimzi.io/kraft: enabled. ZooKeeper is not deployed.

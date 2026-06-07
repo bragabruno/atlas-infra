@@ -1,0 +1,57 @@
+{{- /*
+  Optional single-node Kafka cluster (Strimzi KafkaNodePool + Kafka CR).
+  Controlled by .Values.deployKafkaCluster (default true).
+
+  For dev, the recommended alternative is Azure Event Hubs Kafka endpoint
+  (atlas-docs/04 §1.5). Set deployKafkaCluster=false in values-dev.yaml to
+  skip this resource and point services at the Event Hubs bootstrap address.
+*/ -}}
+{{- if .Values.deployKafkaCluster }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaNodePool
+metadata:
+  name: {{ .Values.kafkaCluster.name }}-combined
+  namespace: {{ .Values.kafkaCluster.namespace }}
+  labels:
+    strimzi.io/cluster: {{ .Values.kafkaCluster.name }}
+spec:
+  replicas: {{ .Values.kafkaCluster.replicas }}
+  roles:
+    - controller
+    - broker
+  storage:
+    type: {{ .Values.kafkaCluster.storage.type }}
+    size: {{ .Values.kafkaCluster.storage.size }}
+    deleteClaim: {{ .Values.kafkaCluster.storage.deleteClaim }}
+---
+apiVersion: kafka.strimzi.io/v1
+kind: Kafka
+metadata:
+  name: {{ .Values.kafkaCluster.name }}
+  namespace: {{ .Values.kafkaCluster.namespace }}
+  annotations:
+    # KRaft mode (no ZooKeeper) — default in Strimzi 1.0.0
+    strimzi.io/node-pools: enabled
+    strimzi.io/kraft: enabled
+spec:
+  kafka:
+    version: {{ .Values.kafkaCluster.kafkaVersion }}  # must be one of: 4.1.0, 4.1.1, 4.1.2, 4.2.0 (Strimzi 1.0.0)
+    # Listener: plain internal (PLAINTEXT) only in dev — no TLS overhead
+    listeners:
+      - name: plain
+        port: 9092
+        type: internal
+        tls: false
+    config:
+      # Retention defaults — individual topics override these via KafkaTopic CRs
+      log.retention.hours: 168       # 7 days (matches atlas.spans.v1, atlas.eval.requests.v1)
+      log.retention.check.interval.ms: 300000
+      offsets.topic.replication.factor: 1
+      transaction.state.log.replication.factor: 1
+      transaction.state.log.min.isr: 1
+      default.replication.factor: 1
+      min.insync.replicas: 1
+  entityOperator:
+    topicOperator: {}    # manages KafkaTopic CRs
+{{- end }}

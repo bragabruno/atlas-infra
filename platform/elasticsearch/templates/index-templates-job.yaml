@@ -1,0 +1,178 @@
+{{- /*
+  atlas-es-init Job
+  Applies two Elasticsearch index templates on first install / upgrade:
+
+    1. atlas-doc-corpus   — BM25 document index (used by atlas-mcp-doc-search for
+                            hybrid retrieval alongside Qdrant dense vectors).
+    2. atlas-logs         — Structured log index (Atlas service logs forwarded by
+                            OTel Collector; see atlas-docs/04 §6).
+
+  The Job is idempotent: PUT index template is a create-or-replace operation.
+*/ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "atlas-elasticsearch.fullname" . }}-init
+  labels:
+    {{- include "atlas-elasticsearch.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "atlas-elasticsearch.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: init-job
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: es-init
+          image: curlimages/curl:8.11.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ES_HOST
+              # Bitnami chart service name convention: <release>-elasticsearch
+              value: "{{ .Release.Name }}-elasticsearch:9200"
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              ES_BASE="http://${ES_HOST}"
+
+              wait_ready() {
+                echo "Waiting for Elasticsearch at ${ES_BASE} ..."
+                until curl -sf "${ES_BASE}/_cluster/health?wait_for_status=yellow&timeout=5s" > /dev/null; do
+                  sleep 3
+                done
+                echo "Elasticsearch is ready."
+              }
+
+              apply_template() {
+                local name="$1"
+                local body="$2"
+                echo "Applying index template: ${name}"
+                curl -sf -X PUT "${ES_BASE}/_index_template/${name}" \
+                  -H "Content-Type: application/json" \
+                  -d "${body}" \
+                  && echo "  -> OK" \
+                  || { echo "  -> FAILED"; exit 1; }
+              }
+
+              wait_ready
+
+              # ----------------------------------------------------------------
+              # 1. atlas-doc-corpus — BM25 document retrieval index
+              #
+              # Purpose: full-text BM25 retrieval leg of the hybrid search in
+              #   atlas-mcp-doc-search (atlas-docs/03 §6.1, §3.1).
+              #
+              # Field mapping:
+              #   text       — analyzed English text (BM25 scoring)
+              #   source_id  — keyword filter for pre-filtering by source document
+              #   doc_id     — keyword identifier of the Atlas document record
+              #   chunk_idx  — integer position of chunk within source document
+              #
+              # Similarity: BM25 (default in ES 8+). No vector field here —
+              #   dense vectors live in Qdrant; results are fused at query time.
+              # ----------------------------------------------------------------
+              apply_template "atlas-doc-corpus" "$(cat <<'JSON'
+              {
+                "index_patterns": ["atlas-doc-corpus-*"],
+                "priority": 100,
+                "template": {
+                  "settings": {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 0,
+                    "analysis": {
+                      "analyzer": {
+                        "atlas_english": {
+                          "type": "english"
+                        }
+                      }
+                    },
+                    "index": {
+                      "similarity": {
+                        "default": {
+                          "type": "BM25",
+                          "k1": 1.2,
+                          "b": 0.75
+                        }
+                      }
+                    }
+                  },
+                  "mappings": {
+                    "dynamic": false,
+                    "properties": {
+                      "source_id":  { "type": "keyword" },
+                      "doc_id":     { "type": "keyword" },
+                      "chunk_idx":  { "type": "integer" },
+                      "text": {
+                        "type": "text",
+                        "analyzer": "atlas_english",
+                        "index_options": "positions"
+                      },
+                      "indexed_at": { "type": "date" }
+                    }
+                  }
+                }
+              }
+              JSON
+              )"
+
+              # ----------------------------------------------------------------
+              # 2. atlas-logs — Structured log index
+              #
+              # Purpose: store Atlas service logs forwarded by the OTel Collector
+              #   log receiver (atlas-docs/04 §6.5).
+              #
+              # Fields mirror OpenTelemetry log data model:
+              #   @timestamp     — log emission time (RFC 3339)
+              #   severity_text  — TRACE | DEBUG | INFO | WARN | ERROR | FATAL
+              #   body           — log message body (keyword; not analyzed — no PII search)
+              #   service.name   — emitting service identifier
+              #   trace_id       — correlated OTel trace ID (keyword for join with spans)
+              #   span_id        — correlated OTel span ID
+              #   attributes     — free-form structured metadata (flattened)
+              #
+              # Retention: managed by ILM policy atlas-logs-ilm (apply separately
+              # via Kibana / ILM API once cluster is stable).
+              # ----------------------------------------------------------------
+              apply_template "atlas-logs" "$(cat <<'JSON'
+              {
+                "index_patterns": ["atlas-logs-*"],
+                "priority": 100,
+                "template": {
+                  "settings": {
+                    "number_of_shards": 1,
+                    "number_of_replicas": 0
+                  },
+                  "mappings": {
+                    "dynamic": false,
+                    "properties": {
+                      "@timestamp":     { "type": "date" },
+                      "severity_text":  { "type": "keyword" },
+                      "severity_number":{ "type": "short" },
+                      "body":           { "type": "keyword", "ignore_above": 32766 },
+                      "service": {
+                        "properties": {
+                          "name":    { "type": "keyword" },
+                          "version": { "type": "keyword" }
+                        }
+                      },
+                      "trace_id":  { "type": "keyword" },
+                      "span_id":   { "type": "keyword" },
+                      "attributes": {
+                        "type": "flattened"
+                      }
+                    }
+                  }
+                }
+              }
+              JSON
+              )"
+
+              echo "All index templates applied successfully."

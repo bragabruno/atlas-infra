@@ -1,0 +1,60 @@
+elasticsearch:
+  # ---------------------------------------------------------------------------
+  # Cluster settings
+  # ---------------------------------------------------------------------------
+  clusterName: atlas-es-dev
+
+  # ---------------------------------------------------------------------------
+  # Elasticsearch image version (matches chart appVersion)
+  # ---------------------------------------------------------------------------
+  image:
+    tag: 9.1.2
+
+  # ---------------------------------------------------------------------------
+  # Topology — single combined master+data+ingest node in dev
+  # ---------------------------------------------------------------------------
+  master:
+    replicaCount: 1
+    masterOnly: false     # combined master+data+ingest role for dev simplicity
+    resources:
+      requests:
+        cpu: "250m"
+        memory: "1Gi"
+      limits:
+        cpu: "1000m"
+        memory: "2Gi"
+    heapSize: "512m"      # JVM heap; must stay within memory limit
+    persistence:
+      enabled: true
+      size: "10Gi"
+      storageClass: ""    # use cluster default (managed-csi in AKS)
+
+  # Disable separate coordinating / data / ingest node pools in dev
+  coordinating:
+    replicaCount: 0
+  data:
+    replicaCount: 0
+  ingest:
+    replicaCount: 0
+
+  # ---------------------------------------------------------------------------
+  # Security — disabled in dev (internal ClusterIP only)
+  # Production: enable X-Pack security; supply credentials via Key Vault CSI
+  # mount at /mnt/secrets/elasticsearch-password (never in values files).
+  # ---------------------------------------------------------------------------
+  security:
+    enabled: false
+
+  # ---------------------------------------------------------------------------
+  # Service
+  # ---------------------------------------------------------------------------
+  service:
+    type: ClusterIP
+    ports:
+      restAPI: 9200       # HTTP REST
+      transport: 9300     # inter-node transport
+
+  # ---------------------------------------------------------------------------
+  # Index templates are applied post-install by the atlas-es-init Job.
+  # See templates/index-templates-job.yaml
+  # ---------------------------------------------------------------------------

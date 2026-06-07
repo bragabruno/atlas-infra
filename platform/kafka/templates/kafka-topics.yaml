@@ -1,0 +1,93 @@
+{{- /*
+  Atlas KafkaTopic manifests (atlas-docs/03 §4)
+
+  Topics:
+    atlas.calls.v1          — billing events; 30-day retention (audit requirement)
+    atlas.spans.v1          — OTel spans; 7-day retention
+    atlas.shadow.v1         — shadow traffic samples; 14-day retention
+    atlas.eval.requests.v1  — eval trigger queue; 7-day retention
+
+  Partition counts are set for dev throughput; scale up in prod values overlay.
+  Replication factor is 1 (single-broker dev cluster).
+
+  When using Azure Event Hubs instead of Strimzi:
+    - KafkaTopic CRs are not applied (Event Hubs does not consume them).
+    - Create topics via the Azure portal / Terraform azurerm_eventhub resources.
+    - Retain the partition counts and retention settings documented here.
+*/ -}}
+
+---
+# atlas.calls.v1 (atlas-docs/03 §4.1)
+# Partition key: api_key_id — ordered budget events per tenant
+# Retention: 30 days (billing audit requirement)
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: atlas.calls.v1
+  namespace: {{ .Values.kafkaCluster.namespace | default "atlas-dev" }}
+  labels:
+    strimzi.io/cluster: {{ .Values.kafkaCluster.name | default "atlas" }}
+spec:
+  partitions: 12            # 12 partitions: enough headroom for tenant-keyed ordering at dev scale
+  replicas: 1
+  config:
+    retention.ms: "2592000000"    # 30 days in ms (30 * 24 * 60 * 60 * 1000)
+    cleanup.policy: delete
+    min.insync.replicas: "1"
+
+---
+# atlas.spans.v1 (atlas-docs/03 §4.2)
+# Partition key: trace_id — collocates spans from the same trace
+# Retention: 7 days (default)
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: atlas.spans.v1
+  namespace: {{ .Values.kafkaCluster.namespace | default "atlas-dev" }}
+  labels:
+    strimzi.io/cluster: {{ .Values.kafkaCluster.name | default "atlas" }}
+spec:
+  partitions: 6             # lower than calls.v1; trace fan-out is bounded
+  replicas: 1
+  config:
+    retention.ms: "604800000"     # 7 days in ms
+    cleanup.policy: delete
+    min.insync.replicas: "1"
+
+---
+# atlas.shadow.v1 (atlas-docs/03 §4.3)
+# Partition key: alias — groups sampled traffic by model alias
+# Retention: 14 days
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: atlas.shadow.v1
+  namespace: {{ .Values.kafkaCluster.namespace | default "atlas-dev" }}
+  labels:
+    strimzi.io/cluster: {{ .Values.kafkaCluster.name | default "atlas" }}
+spec:
+  partitions: 4             # small partition count: shadow is sampled (5% of traffic)
+  replicas: 1
+  config:
+    retention.ms: "1209600000"    # 14 days in ms
+    cleanup.policy: delete
+    min.insync.replicas: "1"
+
+---
+# atlas.eval.requests.v1 (atlas-docs/03 §4.4)
+# Partition key: prompt_version_id — serialises eval runs per prompt version
+# Retention: 7 days
+apiVersion: kafka.strimzi.io/v1
+kind: KafkaTopic
+metadata:
+  name: atlas.eval.requests.v1
+  namespace: {{ .Values.kafkaCluster.namespace | default "atlas-dev" }}
+  labels:
+    strimzi.io/cluster: {{ .Values.kafkaCluster.name | default "atlas" }}
+spec:
+  partitions: 4             # low throughput topic; eval fan-out is prompt-version scoped
+  replicas: 1
+  config:
+    retention.ms: "604800000"     # 7 days in ms
+    cleanup.policy: delete
+    min.insync.replicas: "1"
