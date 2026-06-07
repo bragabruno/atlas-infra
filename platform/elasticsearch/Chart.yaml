@@ -1,0 +1,14 @@
+apiVersion: v2
+name: atlas-elasticsearch
+description: Atlas platform – Elasticsearch for BM25 document retrieval and log indexing
+type: application
+version: 0.1.0
+appVersion: "9.1.2"
+
+dependencies:
+  - name: elasticsearch
+    version: "22.1.7"
+    repository: "https://charts.bitnami.com/bitnami"
+    # Chart version 22.1.7 released 2025-09-01 (bitnami/charts commit 2abc0f9d)
+    # App version: Elasticsearch 9.1.2
+    # Verified >= 14 days before 2026-05-24 cutoff: OK

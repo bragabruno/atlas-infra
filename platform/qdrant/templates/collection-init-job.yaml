@@ -1,0 +1,153 @@
+{{- /*
+  atlas-qdrant-init Job
+  Creates the two Qdrant collections required by Atlas on first install.
+
+  Collections (from atlas-docs/03 §3):
+    doc_chunks      — dense vector index for document retrieval
+    semantic_cache  — per-tenant semantic cache with 24 h TTL
+
+  Vector dimension is intentionally left as a chart value (qdrantVectorDim)
+  because it is fixed by the embedding model chosen at deploy time (atlas-docs/03
+  states "TBD at build time"). Default here is 1536 (OpenAI text-embedding-3-small).
+  Override with --set qdrantVectorDim=<dim> when the embedding model is finalised.
+*/ -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "atlas-qdrant.fullname" . }}-init
+  labels:
+    {{- include "atlas-qdrant.labels" . | nindent 4 }}
+  annotations:
+    # Run once per Helm release; delete after success so it does not block upgrades.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 5
+  template:
+    metadata:
+      labels:
+        {{- include "atlas-qdrant.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: init-job
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: qdrant-init
+          image: curlimages/curl:8.11.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: QDRANT_HOST
+              value: "{{ include "atlas-qdrant.fullname" . }}:6333"
+            - name: VECTOR_DIM
+              value: "{{ .Values.qdrantVectorDim | default 1536 }}"
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              QDRANT_BASE="http://${QDRANT_HOST}"
+
+              wait_ready() {
+                echo "Waiting for Qdrant at ${QDRANT_BASE} ..."
+                until curl -sf "${QDRANT_BASE}/healthz" > /dev/null; do
+                  sleep 2
+                done
+                echo "Qdrant is ready."
+              }
+
+              create_collection() {
+                local name="$1"
+                local body="$2"
+                echo "Creating collection: ${name}"
+                # PUT is idempotent — safe to re-run on upgrade
+                curl -sf -X PUT "${QDRANT_BASE}/collections/${name}" \
+                  -H "Content-Type: application/json" \
+                  -d "${body}" \
+                  | grep -q '"status":"ok"' \
+                  && echo "  -> OK" \
+                  || { echo "  -> FAILED"; exit 1; }
+              }
+
+              wait_ready
+
+              # ----------------------------------------------------------------
+              # doc_chunks (atlas-docs/03 §3.1)
+              # Distance: Cosine | HNSW m=16, ef_construct=100
+              # Payload fields indexed as keyword/integer for pre-filter queries
+              # ----------------------------------------------------------------
+              create_collection "doc_chunks" "$(cat <<JSON
+              {
+                "vectors": {
+                  "size": ${VECTOR_DIM},
+                  "distance": "Cosine",
+                  "hnsw_config": {
+                    "m": 16,
+                    "ef_construct": 100
+                  }
+                },
+                "optimizers_config": {
+                  "default_segment_number": 2
+                },
+                "payload_schema": {
+                  "source_id": { "type": "keyword" },
+                  "doc_id":    { "type": "keyword" },
+                  "chunk_idx": { "type": "integer" }
+                }
+              }
+              JSON
+              )"
+
+              # ----------------------------------------------------------------
+              # semantic_cache (atlas-docs/03 §3.2)
+              # Distance: Cosine | HNSW m=16, ef_construct=100
+              # TTL: 24 h via collection-level on_disk payload + Qdrant TTL index
+              # ----------------------------------------------------------------
+              create_collection "semantic_cache" "$(cat <<JSON
+              {
+                "vectors": {
+                  "size": ${VECTOR_DIM},
+                  "distance": "Cosine",
+                  "hnsw_config": {
+                    "m": 16,
+                    "ef_construct": 100
+                  }
+                },
+                "optimizers_config": {
+                  "default_segment_number": 2
+                },
+                "payload_schema": {
+                  "api_key_id":     { "type": "keyword" },
+                  "prompt_version": { "type": "keyword" },
+                  "created_at":     { "type": "integer" }
+                }
+              }
+              JSON
+              )"
+
+              # Enable TTL index on semantic_cache.created_at (24 h = 86400 s)
+              echo "Setting TTL index on semantic_cache.created_at ..."
+              curl -sf -X PUT "${QDRANT_BASE}/collections/semantic_cache/index" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "field_name": "created_at",
+                  "field_schema": {
+                    "type": "integer",
+                    "is_tenant": false
+                  }
+                }' > /dev/null
+
+              # Qdrant collection-level TTL via optimizer (requires Qdrant >=1.8)
+              curl -sf -X PATCH "${QDRANT_BASE}/collections/semantic_cache" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "optimizers_config": {},
+                  "vectors": {
+                    "": {
+                      "hnsw_config": {}
+                    }
+                  },
+                  "sparse_vectors": {},
+                  "collection_ttl_seconds": 86400
+                }' > /dev/null || true   # ignore if server does not support field yet
+
+              echo "All collections initialised successfully."

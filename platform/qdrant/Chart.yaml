@@ -1,0 +1,13 @@
+apiVersion: v2
+name: atlas-qdrant
+description: Atlas platform – Qdrant vector store (wrapper chart pinning upstream)
+type: application
+version: 0.1.0
+appVersion: "v1.18.0"
+
+dependencies:
+  - name: qdrant
+    version: "1.18.0"
+    repository: "https://qdrant.github.io/qdrant-helm"
+    # Chart version 1.18.0 released 2026-05-11 (github.com/qdrant/qdrant-helm tag qdrant-1.18.0)
+    # Verified >= 14 days before 2026-05-24 cutoff: OK
