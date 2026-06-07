@@ -1,0 +1,34 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored — NEVER commit real values.
+
+resource_group_name = "atlas-dev-rg"
+location            = "westeurope"
+
+cluster_name       = "atlas-aks-dev"
+kubernetes_version = "1.30"
+dns_prefix         = "atlas-dev"
+
+# Subnet IDs — from network module outputs
+subnet_system_id   = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/atlas-vnet/subnets/system"
+subnet_workload_id = "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/atlas-vnet/subnets/workload"
+
+# System node pool — burstable dev SKU
+system_node_pool_name       = "system"
+system_node_pool_vm_size    = "Standard_B2s"
+system_node_pool_node_count = 1
+
+# Workload node pool — burstable dev SKU with autoscaler
+workload_node_pool_name      = "workload"
+workload_node_pool_vm_size   = "Standard_B4ms"
+workload_node_pool_min_count = 1
+workload_node_pool_max_count = 3
+
+# Azure AD group object IDs for cluster admin RBAC — replace with real IDs
+admin_group_object_ids = ["<aad-group-object-id>"]
+
+tags = {
+  project    = "atlas"
+  managed-by = "terraform"
+  module     = "aks"
+  env        = "dev"
+}
