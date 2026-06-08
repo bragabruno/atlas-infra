@@ -1,0 +1,76 @@
+# Bitbucket Pipelines — atlas-infra (INF-2 Gate 1 for IaC, ADR-019, XCUT-6).
+#
+# Gate 1 (IaC correctness + policy):
+#   terraform fmt -check  ->  per-dir: terraform init -backend=false + validate
+#   ->  tflint  ->  checkov  ->  trivy config   (ADR-019: fmt/validate/tflint/
+#   Checkov/Trivy; `terraform test` runs where module tests exist).
+# XCUT-6: validate_diagrams.sh validates Mermaid + PlantUML diagrams.
+#
+# Provider versions are pinned in versions.tf and locked in .terraform.lock.hcl
+# (XCUT-4). Image tags are pinned exactly (atlas-docs/02 §2). Auth to Azure (if
+# ever needed) is OIDC; no secret values appear in this file.
+
+image: hashicorp/terraform:1.15.0  # Terraform 1.15.0 (2026-04-29)
+
+definitions:
+  steps:
+    - step: &tf-fmt-validate
+        name: "Gate 1a — terraform fmt + per-dir init/validate"
+        script:
+          - terraform fmt -check -recursive infra/terraform
+          - |
+            set -e
+            for d in infra/terraform/modules/* infra/terraform/bootstrap infra/terraform/envs/dev; do
+              if ls "$d"/*.tf >/dev/null 2>&1; then
+                echo "== validate: $d =="
+                terraform -chdir="$d" init -backend=false -input=false -no-color
+                terraform -chdir="$d" validate -no-color
+              fi
+            done
+
+    - step: &tflint
+        name: "Gate 1b — tflint"
+        image: ghcr.io/terraform-linters/tflint:v0.62.0  # tflint 0.62.0 (2026-04-19)
+        script:
+          - tflint --version
+          - tflint --init
+          - tflint --recursive --chdir infra/terraform
+
+    - step: &checkov
+        name: "Gate 1c — Checkov (security/compliance)"
+        image: bridgecrew/checkov:3.2.529  # Checkov 3.2.529 (2026-05-14)
+        script:
+          - checkov --version
+          - checkov -d infra/terraform --quiet --compact
+
+    - step: &trivy
+        name: "Gate 1d — Trivy config scan"
+        image: aquasec/trivy:0.70.0  # Trivy 0.70.0 (2026-04-17)
+        script:
+          - trivy --version
+          - trivy config --exit-code 1 --severity HIGH,CRITICAL infra/terraform
+
+    - step: &diagram-validation
+        name: "XCUT-6 — Diagram validation"
+        image: node:22.22.2-bookworm-slim  # 22.22.2 (2026-03-24)
+        script:
+          - apt-get update && apt-get install -y --no-install-recommends
+              default-jre-headless chromium fonts-liberation
+          - export PLANTUML_VERSION=1.2026.3
+          - curl -fsSL -o /tmp/plantuml.jar
+              "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar"
+          - export PLANTUML_JAR=/tmp/plantuml.jar
+          - export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+          - printf '{"args":["--no-sandbox"]}' > /tmp/puppeteer.json
+          - export PUPPETEER_CONFIG=/tmp/puppeteer.json
+          - bash scripts/validate_diagrams.sh docs/diagrams
+
+pipelines:
+  pull-requests:
+    "**":
+      - parallel:
+          - step: *tf-fmt-validate
+          - step: *tflint
+          - step: *checkov
+          - step: *trivy
+          - step: *diagram-validation
