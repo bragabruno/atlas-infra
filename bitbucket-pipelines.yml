@@ -1,12 +1,17 @@
 # Bitbucket Pipelines — atlas-infra (INF-2 Gate 1 for IaC, ADR-019, XCUT-6).
 #
-# Gate 1 (IaC correctness + policy):
-#   Trunk (terraform fmt + tflint)  ->  per-dir: terraform init -backend=false +
-#   validate  ->  checkov  ->  trivy config   (ADR-019: fmt/validate/tflint/
-#   Checkov/Trivy; `terraform test` runs where module tests exist).
-#   Trunk fronts the FORMAT/LINT layer (.trunk/trunk.yaml); the validate +
-#   security gate (validate/Checkov/Trivy) is unchanged and stays standalone.
-# XCUT-6: validate_diagrams.sh validates Mermaid + PlantUML diagrams.
+# Orchestration only: every gate calls a versioned script under scripts/ (the
+# single source of truth). Run `make ci` locally for the same gates. Logic lives
+# in scripts/, not in this file. See scripts/README.md + atlas-docs/07-build-system.md.
+#
+# Gate 1a (scripts/lint.sh): Trunk (terraform fmt + tflint, .trunk/trunk.yaml).
+# Gate 1b (scripts/test.sh): per-dir `terraform init -backend=false` + validate
+#                            (modules + bootstrap + envs/dev; offline, no state).
+# Gate 1c (scripts/security.sh): Checkov + Trivy config + gitleaks. Run strict in
+#          CI (ATLAS_SECURITY_STRICT=1) so findings fail; each scanner runs where
+#          its tool is present and skips cleanly elsewhere (so one script fronts
+#          all three across the pinned scanner images).
+# XCUT-6  (scripts/validate_diagrams.sh): Mermaid + PlantUML diagram validation.
 #
 # Provider versions are pinned in versions.tf and locked in .terraform.lock.hcl
 # (XCUT-4). Image tags are pinned exactly (atlas-docs/02 §2). Auth to Azure (if
@@ -19,50 +24,40 @@ definitions:
     trunk-cache: ~/.cache/trunk
 
   steps:
-    - step: &trunk-fmt-lint
-        name: "Gate 1a — Trunk (terraform fmt + tflint)"
+    - step: &lint
+        name: "Gate 1a — Trunk fmt + tflint (scripts/lint.sh)"
         caches: [trunk-cache]
         script:
-          # Trunk owns the FORMAT/LINT layer: `terraform fmt` + tflint@0.62.0,
-          # pinned in .trunk/trunk.yaml. It replaces the standalone
-          # `terraform fmt -check` and `tflint` steps. The validate/security gate
-          # (init+validate, Checkov, Trivy) stays in its own steps below.
-          # Trunk is git-native and fetches its tools at runtime, so the base
-          # image needs git + curl + network (still zero secret/API spend).
+          # Env prep only; all validation logic is in scripts/lint.sh. Trunk is
+          # git-native and fetches its tools at runtime, so the base image needs
+          # git + curl + network (still zero secret/API spend).
           - apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates
           - curl -fsSL https://get.trunk.io | bash -s -- -y
-          # One check = terraform fmt + tflint over all files; rc!=0 on any issue.
-          - trunk check --all --ci
+          - ./scripts/lint.sh
 
     - step: &tf-validate
-        name: "Gate 1b — per-dir init/validate"
+        name: "Gate 1b — per-dir init/validate (scripts/test.sh)"
         script:
-          - |
-            set -e
-            for d in infra/terraform/modules/* infra/terraform/bootstrap infra/terraform/envs/dev; do
-              if ls "$d"/*.tf >/dev/null 2>&1; then
-                echo "== validate: $d =="
-                terraform -chdir="$d" init -backend=false -input=false -no-color
-                terraform -chdir="$d" validate -no-color
-              fi
-            done
+          - ./scripts/test.sh
 
     - step: &checkov
-        name: "Gate 1c — Checkov (security/compliance)"
+        name: "Gate 1c — Checkov (scripts/security.sh, strict)"
         image: bridgecrew/checkov:3.2.529  # Checkov 3.2.529 (2026-05-14)
         script:
-          - checkov --version
-          - checkov -d infra/terraform --quiet --compact
+          # Only Checkov is present in this image; Trivy + gitleaks skip cleanly.
+          # Strict so Checkov findings fail the gate.
+          - ATLAS_SECURITY_STRICT=1 ./scripts/security.sh
 
     - step: &trivy
-        name: "Gate 1d — Trivy config scan"
+        name: "Gate 1d — Trivy config scan (scripts/security.sh, strict)"
         image: aquasec/trivy:0.70.0  # Trivy 0.70.0 (2026-04-17)
         script:
-          - trivy --version
-          - trivy config --exit-code 1 --severity HIGH,CRITICAL infra/terraform
+          # Only Trivy is present in this image; Checkov + gitleaks skip cleanly.
+          # Strict so Trivy findings fail the gate.
+          - ATLAS_SECURITY_STRICT=1 ./scripts/security.sh
 
     - step: &diagram-validation
-        name: "XCUT-6 — Diagram validation"
+        name: "XCUT-6 — Diagram validation (scripts/validate_diagrams.sh)"
         image: node:22.22.2-bookworm-slim  # 22.22.2 (2026-03-24)
         script:
           - apt-get update && apt-get install -y --no-install-recommends
@@ -74,13 +69,13 @@ definitions:
           - export PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
           - printf '{"args":["--no-sandbox"]}' > /tmp/puppeteer.json
           - export PUPPETEER_CONFIG=/tmp/puppeteer.json
-          - bash scripts/validate_diagrams.sh docs/diagrams
+          - ./scripts/validate_diagrams.sh docs/diagrams
 
 pipelines:
   pull-requests:
     "**":
       - parallel:
-          - step: *trunk-fmt-lint
+          - step: *lint
           - step: *tf-validate
           - step: *checkov
           - step: *trivy

@@ -20,10 +20,15 @@ plugins:
 #                     shells out to the system terraform binary.
 #   tflint@0.62.0   — 2026-04-19 (matches the version already pinned in CI;
 #                     Trunk's default 0.63.1 is 2026-06-03, inside the 14d floor).
+#   gitleaks@8.29.0 — 2025-11-04 (Trunk v1.10.2 plugin known-good). Secret scan
+#                     for scripts/security.sh (`trunk check --filter=gitleaks`);
+#                     also runs in `trunk check --all` so the lint gate fails on
+#                     a committed secret. Repo is clean today.
 lint:
   enabled:
     - terraform@1.1.0
     - tflint@0.62.0
+    - gitleaks@8.29.0
 actions:
   disabled:
     - trunk-announce
