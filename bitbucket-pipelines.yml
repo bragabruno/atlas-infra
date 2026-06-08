@@ -1,9 +1,11 @@
 # Bitbucket Pipelines — atlas-infra (INF-2 Gate 1 for IaC, ADR-019, XCUT-6).
 #
 # Gate 1 (IaC correctness + policy):
-#   terraform fmt -check  ->  per-dir: terraform init -backend=false + validate
-#   ->  tflint  ->  checkov  ->  trivy config   (ADR-019: fmt/validate/tflint/
+#   Trunk (terraform fmt + tflint)  ->  per-dir: terraform init -backend=false +
+#   validate  ->  checkov  ->  trivy config   (ADR-019: fmt/validate/tflint/
 #   Checkov/Trivy; `terraform test` runs where module tests exist).
+#   Trunk fronts the FORMAT/LINT layer (.trunk/trunk.yaml); the validate +
+#   security gate (validate/Checkov/Trivy) is unchanged and stays standalone.
 # XCUT-6: validate_diagrams.sh validates Mermaid + PlantUML diagrams.
 #
 # Provider versions are pinned in versions.tf and locked in .terraform.lock.hcl
@@ -13,11 +15,28 @@
 image: hashicorp/terraform:1.15.0  # Terraform 1.15.0 (2026-04-29)
 
 definitions:
+  caches:
+    trunk-cache: ~/.cache/trunk
+
   steps:
-    - step: &tf-fmt-validate
-        name: "Gate 1a — terraform fmt + per-dir init/validate"
+    - step: &trunk-fmt-lint
+        name: "Gate 1a — Trunk (terraform fmt + tflint)"
+        caches: [trunk-cache]
         script:
-          - terraform fmt -check -recursive infra/terraform
+          # Trunk owns the FORMAT/LINT layer: `terraform fmt` + tflint@0.62.0,
+          # pinned in .trunk/trunk.yaml. It replaces the standalone
+          # `terraform fmt -check` and `tflint` steps. The validate/security gate
+          # (init+validate, Checkov, Trivy) stays in its own steps below.
+          # Trunk is git-native and fetches its tools at runtime, so the base
+          # image needs git + curl + network (still zero secret/API spend).
+          - apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates
+          - curl -fsSL https://get.trunk.io | bash -s -- -y
+          # One check = terraform fmt + tflint over all files; rc!=0 on any issue.
+          - trunk check --all --ci
+
+    - step: &tf-validate
+        name: "Gate 1b — per-dir init/validate"
+        script:
           - |
             set -e
             for d in infra/terraform/modules/* infra/terraform/bootstrap infra/terraform/envs/dev; do
@@ -27,14 +46,6 @@ definitions:
                 terraform -chdir="$d" validate -no-color
               fi
             done
-
-    - step: &tflint
-        name: "Gate 1b — tflint"
-        image: ghcr.io/terraform-linters/tflint:v0.62.0  # tflint 0.62.0 (2026-04-19)
-        script:
-          - tflint --version
-          - tflint --init
-          - tflint --recursive --chdir infra/terraform
 
     - step: &checkov
         name: "Gate 1c — Checkov (security/compliance)"
@@ -69,8 +80,8 @@ pipelines:
   pull-requests:
     "**":
       - parallel:
-          - step: *tf-fmt-validate
-          - step: *tflint
+          - step: *trunk-fmt-lint
+          - step: *tf-validate
           - step: *checkov
           - step: *trivy
           - step: *diagram-validation
