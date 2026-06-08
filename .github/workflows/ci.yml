@@ -1,0 +1,123 @@
+# GitHub Actions CI — atlas-infra (INF-2 Gate 1 for IaC, ADR-019, XCUT-6).
+#
+# Mirrors bitbucket-pipelines.yml: orchestration-only — every gate calls a
+# versioned script under scripts/ (the single source of truth). Logic lives in
+# scripts/, not here. bitbucket-pipelines.yml is kept as the Enhesa-mirror
+# reference; this file is the executable gate for github.com/bragabruno/atlas-infra.
+# Run `make ci` locally for the same gates. See atlas-docs/07-build-system.md.
+#
+# Gate 1a (scripts/lint.sh): Trunk (terraform fmt + tflint, .trunk/trunk.yaml).
+# Gate 1b (scripts/test.sh): per-dir `terraform init -backend=false` + validate
+#                            (modules + bootstrap + envs/dev; offline, no state).
+# Gate 1c/1d (scripts/security.sh, strict): Checkov + Trivy config scan. Each job
+#   installs ONE pinned scanner and runs security.sh; the script's has_cmd logic
+#   skips the absent scanners cleanly (gitleaks-via-Trunk also skips). Bitbucket
+#   pins these as tool *images*; here the SAME pinned tool versions are installed
+#   on ubuntu so actions/checkout (a Node action) has a Node-capable host.
+# XCUT-6  (scripts/validate_diagrams.sh): Mermaid + PlantUML diagram validation.
+#
+# All third-party actions are pinned to a commit SHA (supply-chain rule: no
+# floating refs; every pin verified >14 days old). The trailing comment records
+# the human-readable tag and release date each SHA corresponds to.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Gate 1a — Trunk fmt + tflint (scripts/lint.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (2026-01-09)
+      # Trunk owns terraform fmt + tflint and fetches them at runtime; cache them
+      # keyed on the pinned config. No separate terraform install needed here.
+      - name: Cache Trunk
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5 (2026-04-13)
+        with:
+          path: ~/.cache/trunk
+          key: trunk-${{ runner.os }}-${{ hashFiles('.trunk/trunk.yaml') }}
+      - name: Install Trunk
+        run: curl -fsSL https://get.trunk.io | bash -s -- -y
+      # CI=true is set by GitHub, so scripts/lint.sh runs `trunk check --all --ci`.
+      - name: Lint (terraform fmt + tflint)
+        run: ./scripts/lint.sh
+
+  tf-validate:
+    name: Gate 1b — per-dir init/validate (scripts/test.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (2026-01-09)
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1 (2026-05-12)
+        with:
+          terraform_version: 1.15.0 # matches bitbucket image hashicorp/terraform:1.15.0
+          terraform_wrapper: false # scripts/test.sh calls terraform directly
+      - name: Terraform init + validate (offline, no backend)
+        run: ./scripts/test.sh
+
+  checkov:
+    name: Gate 1c — Checkov (scripts/security.sh, strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (2026-01-09)
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0 (2026-01-22)
+        with:
+          python-version: 3.12.13
+      - name: Install pinned Checkov
+        run: pip install --quiet checkov==3.2.529 # Checkov 3.2.529 (2026-05-14)
+      # Only Checkov is present; Trivy + gitleaks skip cleanly. Strict = findings fail.
+      - name: Checkov scan
+        run: ATLAS_SECURITY_STRICT=1 ./scripts/security.sh
+
+  trivy:
+    name: Gate 1d — Trivy config scan (scripts/security.sh, strict)
+    runs-on: ubuntu-latest
+    env:
+      TRIVY_VERSION: 0.70.0 # Trivy 0.70.0 (2026-04-17)
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (2026-01-09)
+      - name: Install pinned Trivy
+        run: |
+          curl -fsSL -o /tmp/trivy.tar.gz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          sudo tar -xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy
+      # Only Trivy is present; Checkov + gitleaks skip cleanly. Strict = findings fail.
+      - name: Trivy config scan
+        run: ATLAS_SECURITY_STRICT=1 ./scripts/security.sh
+
+  diagrams:
+    name: XCUT-6 — Diagram validation (scripts/validate_diagrams.sh)
+    runs-on: ubuntu-latest
+    env:
+      # mermaid-cli (11.14.0) runs headless via the system Chromium. On Ubuntu the
+      # apt 'chromium' package installs the real binary at /usr/bin/chromium
+      # (matches the bitbucket node-image step); 'chromium-browser' is a snap stub
+      # that fails headless in CI, so it is deliberately NOT used here.
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (2026-01-09)
+      - name: Install JRE + Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            default-jre-headless chromium fonts-liberation
+      - name: Fetch pinned PlantUML jar
+        # Pinned PlantUML jar (1.2026.3, 2026-05-08) from the GitHub release.
+        env:
+          PLANTUML_VERSION: 1.2026.3
+        run: |
+          curl -fsSL -o /tmp/plantuml.jar \
+            "https://github.com/plantuml/plantuml/releases/download/v${PLANTUML_VERSION}/plantuml-${PLANTUML_VERSION}.jar"
+      - name: Validate diagrams
+        env:
+          PLANTUML_JAR: /tmp/plantuml.jar
+        run: |
+          printf '{"args":["--no-sandbox"]}' > /tmp/puppeteer.json
+          export PUPPETEER_CONFIG=/tmp/puppeteer.json
+          ./scripts/validate_diagrams.sh docs/diagrams
