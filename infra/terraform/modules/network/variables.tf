@@ -59,20 +59,6 @@ variable "subnet_data_cidr" {
 }
 
 # ---------------------------------------------------------------------------
-# NSG / Access Control
-# ---------------------------------------------------------------------------
-
-variable "allowed_api_source_cidrs" {
-  description = <<-EOT
-    List of CIDR blocks allowed to reach the workload subnet on HTTPS (443).
-    Typically the corporate egress IP(s) or an Azure Front Door service tag.
-    Defaults to deny-all (empty list — you must supply at least one value).
-  EOT
-  type        = list(string)
-  default     = []
-}
-
-# ---------------------------------------------------------------------------
 # Tagging
 # ---------------------------------------------------------------------------
 

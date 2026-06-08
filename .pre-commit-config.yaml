@@ -16,5 +16,6 @@ repos:
   - repo: https://github.com/antonbabenko/pre-commit-terraform
     rev: v1.105.0  # 2026-01-06
     hooks:
-      - id: terraform_fmt
+      # terraform_fmt is now owned by Trunk (.trunk/trunk.yaml: terraform fmt).
+      # terraform_validate stays here — the validate gate is unchanged by Trunk.
       - id: terraform_validate
