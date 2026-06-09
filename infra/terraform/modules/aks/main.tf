@@ -27,12 +27,30 @@
 ###############################################################################
 
 resource "azurerm_kubernetes_cluster" "this" {
+  # --- Documented Checkov exceptions (deliberate dev cost/agility tradeoffs) ---
+  #checkov:skip=CKV_AZURE_115:Dev uses a public API server restricted by authorized IP ranges (api_server_access_profile); private cluster is a prod-only change.
+  #checkov:skip=CKV_AZURE_170:Dev runs the Free AKS tier; the paid Standard tier + uptime SLA is a prod-only cost.
+  #checkov:skip=CKV_AZURE_226:Burstable B-series dev SKUs lack a large enough cache disk for ephemeral OS disks; managed OS disks are used in dev.
+  #checkov:skip=CKV_AZURE_227:Host encryption requires the EncryptionAtHost subscription feature; enabling it risks apply failure in dev, deferred to prod.
+  #checkov:skip=CKV_AZURE_117:A customer-managed disk encryption set needs an encryption Key Vault created ahead of the cluster; the secrets vault is created after AKS (identity->secrets chain), so CMK disk encryption is deferred to prod.
+
   name                = var.cluster_name
   location            = var.location
   resource_group_name = var.resource_group_name
 
   dns_prefix         = var.dns_prefix
   kubernetes_version = var.kubernetes_version
+
+  # Disable the local admin (clusterAdmin) kubeconfig; access is via Entra ID +
+  # Azure RBAC only (CKV_AZURE_141).
+  local_account_disabled = true
+
+  # Subscribe to the automatic patch upgrade channel (CKV_AZURE_171).
+  automatic_channel_upgrade = "patch"
+
+  # Azure Policy add-on for Kubernetes (Gatekeeper) — enforces guardrails
+  # (CKV_AZURE_116).
+  azure_policy_enabled = true
 
   # -------------------------------------------------------------------------
   # OIDC Issuer + Workload Identity
@@ -84,6 +102,9 @@ resource "azurerm_kubernetes_cluster" "this" {
     os_disk_size_gb = var.system_node_pool_os_disk_size_gb
     vnet_subnet_id  = var.subnet_system_id
 
+    # Minimum 50 pods/node (CKV_AZURE_168). /22 subnets leave ample IP headroom.
+    max_pods = var.node_pool_max_pods
+
     only_critical_addons_enabled = true
 
     tags = var.tags
@@ -112,6 +133,23 @@ resource "azurerm_kubernetes_cluster" "this" {
     secret_rotation_interval = "2m"
   }
 
+  # -------------------------------------------------------------------------
+  # API server access — restrict the public API server to an explicit set of
+  # CIDRs (CKV_AZURE_6 / Trivy AZU-0041). An empty list means "no restriction",
+  # so var.api_server_authorized_ip_ranges must be populated per-environment.
+  # -------------------------------------------------------------------------
+  api_server_access_profile {
+    authorized_ip_ranges = var.api_server_authorized_ip_ranges
+  }
+
+  # -------------------------------------------------------------------------
+  # Container Insights / Azure Monitor — ship control-plane + container logs to
+  # the Log Analytics workspace (CKV_AZURE_4).
+  # -------------------------------------------------------------------------
+  oms_agent {
+    log_analytics_workspace_id = var.log_analytics_workspace_id
+  }
+
   tags = var.tags
 }
 
@@ -123,6 +161,9 @@ resource "azurerm_kubernetes_cluster" "this" {
 ###############################################################################
 
 resource "azurerm_kubernetes_cluster_node_pool" "workload" {
+  #checkov:skip=CKV_AZURE_226:Burstable B-series dev SKUs lack a large enough cache disk for ephemeral OS disks; managed OS disks are used in dev.
+  #checkov:skip=CKV_AZURE_227:Host encryption requires the EncryptionAtHost subscription feature; enabling it risks apply failure in dev, deferred to prod.
+
   name                  = var.workload_node_pool_name
   kubernetes_cluster_id = azurerm_kubernetes_cluster.this.id
   vm_size               = var.workload_node_pool_vm_size
@@ -134,6 +175,9 @@ resource "azurerm_kubernetes_cluster_node_pool" "workload" {
 
   os_disk_size_gb = var.workload_node_pool_os_disk_size_gb
   vnet_subnet_id  = var.subnet_workload_id
+
+  # Minimum 50 pods/node (CKV_AZURE_168).
+  max_pods = var.node_pool_max_pods
 
   # Node labels/taints: none by default — Atlas services tolerate the pool
   # via namespace-scoped network policy, not taints.

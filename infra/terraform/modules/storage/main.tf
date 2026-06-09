@@ -23,6 +23,11 @@
 ###############################################################################
 
 resource "azurerm_storage_account" "this" {
+  # --- Documented Checkov exceptions (deliberate dev cost/agility tradeoffs) ---
+  #checkov:skip=CKV2_AZURE_1:Dev uses platform-managed keys; customer-managed-key encryption needs a purge-protected Key Vault key and is deferred to prod (the dev Key Vault keeps purge protection off for agility).
+  #checkov:skip=CKV_AZURE_206:Dev uses LRS (locally redundant) by cost; GRS/ZRS replication is a prod-only choice.
+  #checkov:skip=CKV_AZURE_230:Dev uses LRS (locally redundant) by cost; geo/zone-redundant replication is a prod-only choice.
+
   name                = var.storage_account_name
   location            = var.location
   resource_group_name = var.resource_group_name
@@ -35,9 +40,20 @@ resource "azurerm_storage_account" "this" {
   https_traffic_only_enabled = true
   min_tls_version            = "TLS1_2"
 
+  # Disable Shared Key authorization — access is via Entra ID / Workload
+  # Identity only (CKV2_AZURE_40). The provider must use AAD for data-plane
+  # container operations (storage_use_azuread = true) at apply time.
+  shared_access_key_enabled = false
+
   # Deny all public blob access; service endpoint allowlist controls access
   public_network_access_enabled   = false
   allow_nested_items_to_be_public = false
+
+  # SAS tokens must carry an expiration policy (CKV2_AZURE_41).
+  sas_policy {
+    expiration_period = "01.00:00:00" # 1 day
+    expiration_action = "Log"
+  }
 
   # Blob versioning and soft-delete for point-in-time recovery
   blob_properties {
@@ -49,6 +65,18 @@ resource "azurerm_storage_account" "this" {
 
     container_delete_retention_policy {
       days = var.container_delete_retention_days
+    }
+  }
+
+  # Storage Analytics logging for the Queue service: read/write/delete
+  # (CKV_AZURE_33).
+  queue_properties {
+    logging {
+      delete                = true
+      read                  = true
+      write                 = true
+      version               = "1.0"
+      retention_policy_days = var.blob_delete_retention_days
     }
   }
 
@@ -128,6 +156,12 @@ resource "azurerm_storage_management_policy" "this" {
 ###############################################################################
 
 resource "azurerm_container_registry" "this" {
+  # --- Documented Checkov exceptions (deliberate dev cost/agility tradeoffs) ---
+  #checkov:skip=CKV_AZURE_164:Content trust (signed images) is gated behind var.acr_trust_policy_enabled and stays off in dev; enabled for prod.
+  #checkov:skip=CKV_AZURE_165:Geo-replication is a single-region dev environment non-goal; enabled for multi-region prod.
+  #checkov:skip=CKV_AZURE_233:Zone redundancy is a prod-only availability choice; dev is single-zone by cost.
+  #checkov:skip=CKV_AZURE_237:Dedicated data endpoints are a prod-only hardening; the dev registry already uses a private endpoint.
+
   name                = var.acr_name
   location            = var.location
   resource_group_name = var.resource_group_name
@@ -203,4 +237,70 @@ resource "azurerm_private_endpoint" "acr" {
   }
 
   tags = var.tags
+}
+
+###############################################################################
+# Storage Account — Blob private endpoint + private DNS zone
+#
+# Resolves <account>.blob.core.windows.net to a private IP in the workload
+# subnet so blob access never traverses the public internet (CKV2_AZURE_33).
+###############################################################################
+
+resource "azurerm_private_dns_zone" "blob" {
+  name                = "privatelink.blob.core.windows.net"
+  resource_group_name = var.resource_group_name
+  tags                = var.tags
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
+  name                  = "pdnslink-blob-atlas-vnet"
+  resource_group_name   = var.resource_group_name
+  private_dns_zone_name  = azurerm_private_dns_zone.blob.name
+  virtual_network_id    = var.vnet_id
+  registration_enabled  = false
+  tags                  = var.tags
+}
+
+resource "azurerm_private_endpoint" "blob" {
+  name                = "pe-${var.storage_account_name}-blob"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  subnet_id           = var.subnet_workload_id
+
+  private_service_connection {
+    name                           = "psc-${var.storage_account_name}-blob"
+    private_connection_resource_id = azurerm_storage_account.this.id
+    subresource_names              = ["blob"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "pdnszg-${var.storage_account_name}-blob"
+    private_dns_zone_ids = [azurerm_private_dns_zone.blob.id]
+  }
+
+  tags = var.tags
+}
+
+###############################################################################
+# Diagnostic settings — Blob service read/write/delete logging to Log Analytics
+# (CKV2_AZURE_21).
+###############################################################################
+
+resource "azurerm_monitor_diagnostic_setting" "blob" {
+  name                       = "diag-${var.storage_account_name}-blob"
+  target_resource_id         = "${azurerm_storage_account.this.id}/blobServices/default"
+  log_analytics_workspace_id = var.log_analytics_workspace_id
+
+  enabled_log {
+    category = "StorageRead"
+  }
+
+  enabled_log {
+    category = "StorageWrite"
+  }
+
+  enabled_log {
+    category = "StorageDelete"
+  }
 }

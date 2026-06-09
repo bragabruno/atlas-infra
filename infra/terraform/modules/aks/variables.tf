@@ -129,6 +129,35 @@ variable "admin_group_object_ids" {
 }
 
 # ---------------------------------------------------------------------------
+# Security hardening
+# ---------------------------------------------------------------------------
+
+variable "api_server_authorized_ip_ranges" {
+  description = <<-EOT
+    CIDR ranges allowed to reach the AKS public API server (CKV_AZURE_6 / AZU-0041).
+    MUST be non-empty per environment (admin/office egress + CI runner egress);
+    an empty list disables the restriction. No default — supplied via env tfvars.
+  EOT
+  type        = list(string)
+}
+
+variable "log_analytics_workspace_id" {
+  description = "Resource ID of the Log Analytics workspace for the oms_agent add-on (from observability module output workspace_id)."
+  type        = string
+}
+
+variable "node_pool_max_pods" {
+  description = "Maximum pods per node for both node pools (CKV_AZURE_168 requires >= 50)."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.node_pool_max_pods >= 50
+    error_message = "node_pool_max_pods must be at least 50 (CKV_AZURE_168)."
+  }
+}
+
+# ---------------------------------------------------------------------------
 # Tagging
 # ---------------------------------------------------------------------------
 
