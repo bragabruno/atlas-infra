@@ -121,6 +121,15 @@ variable "admin_group_object_ids" {
   default     = []
 }
 
+variable "api_server_authorized_ip_ranges" {
+  description = <<-EOT
+    CIDR ranges allowed to reach the AKS public API server (CKV_AZURE_6 / AZU-0041).
+    MUST be set per-environment in terraform.tfvars (admin/office egress + CI runner
+    egress); an empty list disables the restriction. No default — supply via tfvars.
+  EOT
+  type        = list(string)
+}
+
 # ---------------------------------------------------------------------------
 # Identity
 # ---------------------------------------------------------------------------

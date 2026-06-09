@@ -38,11 +38,28 @@ module "network" {
 }
 
 ###############################################################################
+# 1b. Observability — Log Analytics workspace (diagnostic sink)
+#
+# Consumed by the aks (oms_agent) and storage (diagnostic settings) modules.
+# Depends only on the resource group, so it is created ahead of aks/storage.
+###############################################################################
+
+module "observability" {
+  source = "../../modules/observability"
+
+  resource_group_name = var.resource_group_name
+  location            = var.location
+
+  tags = merge(var.tags, { module = "observability" })
+}
+
+###############################################################################
 # 2. AKS — cluster, system + workload node pools, OIDC issuer
 #
 # Consumes:
 #   module.network.subnet_system_id
 #   module.network.subnet_workload_id
+#   module.observability.workspace_id
 ###############################################################################
 
 module "aks" {
@@ -67,6 +84,10 @@ module "aks" {
   workload_node_pool_max_count = var.workload_node_pool_max_count
 
   admin_group_object_ids = var.admin_group_object_ids
+
+  # Security hardening: restrict the public API server + ship logs to Log Analytics
+  api_server_authorized_ip_ranges = var.api_server_authorized_ip_ranges
+  log_analytics_workspace_id      = module.observability.workspace_id
 
   tags = merge(var.tags, { module = "aks" })
 }
@@ -200,6 +221,9 @@ module "storage" {
   # Wired from network outputs
   subnet_workload_id = module.network.subnet_workload_id
   vnet_id            = module.network.vnet_id
+
+  # Blob/queue diagnostic-setting destination (CKV2_AZURE_21)
+  log_analytics_workspace_id = module.observability.workspace_id
 
   storage_account_name             = var.storage_account_name
   storage_account_replication_type = "LRS" # dev: locally redundant (cheapest)

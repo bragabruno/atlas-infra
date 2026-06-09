@@ -26,6 +26,11 @@ variable "vnet_id" {
   type        = string
 }
 
+variable "log_analytics_workspace_id" {
+  description = "Resource ID of the Log Analytics workspace (from observability module output workspace_id). Diagnostic-setting destination for blob read/write/delete logging (CKV2_AZURE_21)."
+  type        = string
+}
+
 # ---------------------------------------------------------------------------
 # Storage Account — Blob
 # ---------------------------------------------------------------------------
