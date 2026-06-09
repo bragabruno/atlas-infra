@@ -1,0 +1,9 @@
+# Trivy IaC misconfig suppressions — each entry is a documented, deliberate exception.
+#
+# AZU-0012 — "No network rules defined and default action allows access."
+# Only fires on the Terraform state backend account (bootstrap/main.tf), which
+# must stay reachable from CI/local for the azurerm backend. A default-Deny ACL
+# without the runner's egress IPs would lock out state operations. The application
+# storage module (modules/storage) DOES define network_rules with default_action
+# = "Deny", so this suppression is scoped in practice to the bootstrap account.
+AZU-0012

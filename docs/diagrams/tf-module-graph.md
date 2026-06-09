@@ -18,12 +18,18 @@ flowchart TD
         SEC["secrets\n(Key Vault,\nCSI driver,\nSecretProviderClass)"]
         DATA["data\n(PostgreSQL Flexible Server,\nRedis)"]
         STOR["storage\n(Blob containers,\nACR)"]
-        KAFKA["kafka\n(Event Hubs / Strimzi)"]
-        OBS["observability\n(OTel Collector,\nMLflow)"]
+    end
+
+    subgraph PLATFORM["platform/ Helm charts\n(deployed via Skaffold / make cloud-up)"]
+        KAFKA["kafka\n(Strimzi or Event Hubs)"]
+        QDRANT["qdrant"]
+        ES["elasticsearch"]
+        MLFLOW["mlflow"]
+        OTEL["otel-collector"]
+        CC["cost-controls\n(scale-to-zero CronJob)"]
     end
 
     DEV -->|"compose"| NET
-    PROD -->|"compose"| NET
 
     NET --> AKS
 
@@ -31,15 +37,12 @@ flowchart TD
     AKS --> SEC
     AKS --> DATA
     AKS --> STOR
-    AKS --> KAFKA
-    AKS --> OBS
 
     IDN -.->|"provides identities to"| SEC
     IDN -.->|"provides identities to"| DATA
     IDN -.->|"provides identities to"| STOR
-    IDN -.->|"provides identities to"| KAFKA
-    IDN -.->|"provides identities to"| OBS
+
+    AKS -.->|"cluster hosts"| PLATFORM
 
     DEV <-->|"remote state"| STATE
-    PROD <-->|"remote state"| STATE
 ```

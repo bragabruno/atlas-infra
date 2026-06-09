@@ -31,6 +31,7 @@ TF_BACKEND_CONT ?= tfstate
 TF_VARS_FILE    ?= $(TF_DIR)/terraform.tfvars
 
 .PHONY: help \
+        lint test infra security build coverage docker ci local \
         tf-init tf-plan tf-apply tf-destroy \
         full-up full-down destroy \
         cloud-up cloud-down platform-up platform-down \
@@ -73,6 +74,50 @@ help:
 	@echo "Dev loop (requires skaffold):"
 	@echo "  skaffold dev --profile=$(ENV) --namespace=$(NAMESPACE)"
 	@echo ""
+	@echo "Build system (single source of truth — logic in scripts/):"
+	@echo "  lint       Trunk (terraform fmt + tflint)"
+	@echo "  test       per-dir terraform init -backend=false + validate"
+	@echo "  infra      helm lint + template every platform/ chart"
+	@echo "  security   Checkov + Trivy + gitleaks (advisory; ATLAS_SECURITY_STRICT=1)"
+	@echo "  build      N/A (no app artifact) — clean skip"
+	@echo "  coverage   N/A (no unit-test suite) — clean skip"
+	@echo "  docker     N/A (no Dockerfile) — clean skip"
+	@echo "  ci         lint -> test -> infra -> security (what CI runs)"
+	@echo "  local      terraform plan for the dev env (needs backend + az login)"
+	@echo ""
+
+# ===========================================================================
+# Build system — single source of truth (logic lives in scripts/, not here).
+# Developers and CI run the same targets. See scripts/README.md and
+# atlas-docs/07-build-system.md.
+# ===========================================================================
+
+lint: ## Trunk (terraform fmt + tflint)
+	@./scripts/lint.sh
+
+test: ## Per-dir terraform init -backend=false + validate
+	@./scripts/test.sh
+
+infra: ## helm lint + template every platform/ chart
+	@./scripts/infra.sh
+
+security: ## Checkov + Trivy + gitleaks (advisory; ATLAS_SECURITY_STRICT=1)
+	@./scripts/security.sh
+
+build: ## N/A (no application artifact) — clean skip
+	@./scripts/build.sh
+
+coverage: ## N/A (no unit-test suite) — clean skip
+	@./scripts/coverage.sh
+
+docker: ## N/A (no Dockerfile) — clean skip
+	@./scripts/docker.sh
+
+ci: ## Run the full build gate — what CI runs
+	@./scripts/ci.sh
+
+local: ## terraform plan for the dev env (needs backend + az login)
+	@./scripts/local.sh
 
 # ---------------------------------------------------------------------------
 # context-check — guard against deploying to wrong cluster

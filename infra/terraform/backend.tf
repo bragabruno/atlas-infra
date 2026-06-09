@@ -20,6 +20,8 @@
 ###############################################################################
 
 terraform {
+  required_version = ">= 1.9.0"
+
   backend "azurerm" {
     # All values supplied via -backend-config at init time.
     # Do not hard-code resource_group_name, storage_account_name,

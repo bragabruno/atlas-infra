@@ -45,6 +45,18 @@ resource "azurerm_resource_group" "tfstate" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_storage_account" "tfstate" {
+  # --- Documented exceptions — this is the one-time Terraform state backend ---
+  # account (local-backend bootstrap), which has fundamentally different
+  # constraints from the application storage. Hardened equivalents live in the
+  # storage module; the state account must stay simple and reachable.
+  #checkov:skip=CKV2_AZURE_40:The azurerm backend requires shared-key auth (shared_access_key_enabled=true); disabling it breaks state access.
+  #checkov:skip=CKV_AZURE_59:The tfstate account must stay reachable from CI/local for the azurerm backend; locking down public access would block state operations.
+  #checkov:skip=CKV2_AZURE_33:A private-endpoint-only tfstate account would lock out the azurerm backend from CI/local; out of scope for a one-time bootstrap.
+  #checkov:skip=CKV2_AZURE_1:tfstate uses platform-managed keys; CMK adds a Key Vault dependency that does not exist at bootstrap time (this runs before any vault).
+  #checkov:skip=CKV_AZURE_206:Dev tfstate uses LRS by cost; GRS is a prod-DR choice.
+  #checkov:skip=CKV2_AZURE_41:State access uses shared-key backend auth, not SAS tokens; a SAS expiration policy does not apply.
+  #checkov:skip=CKV_AZURE_33:The tfstate account uses only the blob service for state; no queue service is in use.
+
   name                = var.storage_account_name
   resource_group_name = azurerm_resource_group.tfstate.name
   location            = azurerm_resource_group.tfstate.location
@@ -83,6 +95,7 @@ resource "azurerm_storage_account" "tfstate" {
 # ---------------------------------------------------------------------------
 
 resource "azurerm_storage_container" "tfstate" {
+  #checkov:skip=CKV2_AZURE_21:Blob read logging needs a Log Analytics workspace; the one-time local-backend bootstrap runs before any observability infra exists.
   name                  = var.container_name
   storage_account_id    = azurerm_storage_account.tfstate.id
   container_access_type = "private"

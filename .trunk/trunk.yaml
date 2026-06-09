@@ -1,0 +1,38 @@
+# This file controls the behavior of Trunk: https://docs.trunk.io/cli
+# To learn more about the format of this file, see https://docs.trunk.io/reference/trunk-yaml
+version: 0.1
+cli:
+  version: 1.25.0
+# Trunk provides extensibility via plugins. (https://docs.trunk.io/plugins)
+plugins:
+  sources:
+    - id: trunk
+      ref: v1.10.2
+      uri: https://github.com/trunk-io/plugins
+# This is the section where you manage your linters. (https://docs.trunk.io/check/configuration)
+# Trunk owns the Terraform FORMAT/LINT layer here. The security/validate posture
+# is unchanged: `terraform validate` and Checkov remain dedicated CI steps
+# (bitbucket-pipelines.yml). Trunk's `terraform` linter only runs `fmt` by
+# default — its `validate` command stays disabled — so this does not duplicate
+# or alter the validate gate.
+# Versions are pinned to releases >=14 days old (atlas-docs/02 §2):
+#   terraform@1.1.0 — Trunk plugin definition for `terraform fmt` (2024-07-09);
+#                     shells out to the system terraform binary.
+#   tflint@0.62.0   — 2026-04-19 (matches the version already pinned in CI;
+#                     Trunk's default 0.63.1 is 2026-06-03, inside the 14d floor).
+#   gitleaks@8.29.0 — 2025-11-04 (Trunk v1.10.2 plugin known-good). Secret scan
+#                     for scripts/security.sh (`trunk check --filter=gitleaks`);
+#                     also runs in `trunk check --all` so the lint gate fails on
+#                     a committed secret. Repo is clean today.
+lint:
+  enabled:
+    - terraform@1.1.0
+    - tflint@0.62.0
+    - gitleaks@8.29.0
+actions:
+  disabled:
+    - trunk-announce
+    - trunk-check-pre-push
+    - trunk-fmt-pre-commit
+  enabled:
+    - trunk-upgrade-available
