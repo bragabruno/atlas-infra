@@ -96,6 +96,7 @@ resource "azurerm_storage_account" "this" {
 ###############################################################################
 
 resource "azurerm_storage_container" "this" {
+  #checkov:skip=CKV2_AZURE_21:Blob read logging IS configured via azurerm_monitor_diagnostic_setting on blobServices/default (see below); checkov's per-container graph check does not resolve the service-scoped diagnostic setting.
   for_each = var.blob_containers
 
   name                  = each.key
@@ -161,6 +162,7 @@ resource "azurerm_container_registry" "this" {
   #checkov:skip=CKV_AZURE_165:Geo-replication is a single-region dev environment non-goal; enabled for multi-region prod.
   #checkov:skip=CKV_AZURE_233:Zone redundancy is a prod-only availability choice; dev is single-zone by cost.
   #checkov:skip=CKV_AZURE_237:Dedicated data endpoints are a prod-only hardening; the dev registry already uses a private endpoint.
+  #checkov:skip=CKV_AZURE_166:Quarantine/scan-on-push IS enabled via quarantine_policy_enabled (Premium-gated conditional that resolves true in dev); checkov cannot evaluate the ternary statically.
 
   name                = var.acr_name
   location            = var.location
@@ -255,7 +257,7 @@ resource "azurerm_private_dns_zone" "blob" {
 resource "azurerm_private_dns_zone_virtual_network_link" "blob" {
   name                  = "pdnslink-blob-atlas-vnet"
   resource_group_name   = var.resource_group_name
-  private_dns_zone_name  = azurerm_private_dns_zone.blob.name
+  private_dns_zone_name = azurerm_private_dns_zone.blob.name
   virtual_network_id    = var.vnet_id
   registration_enabled  = false
   tags                  = var.tags

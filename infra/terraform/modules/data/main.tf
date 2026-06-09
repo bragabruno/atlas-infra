@@ -27,6 +27,8 @@
 ###############################################################################
 
 resource "azurerm_postgresql_flexible_server" "this" {
+  #checkov:skip=CKV_AZURE_136:Dev disables geo-redundant backups by cost (pg_geo_redundant_backup_enabled=false); geo-redundancy is a prod-DR choice.
+
   name                = var.pg_server_name
   location            = var.location
   resource_group_name = var.resource_group_name
@@ -141,6 +143,8 @@ resource "azurerm_private_endpoint" "postgres" {
 ###############################################################################
 
 resource "azurerm_redis_cache" "this" {
+  #checkov:skip=CKV_AZURE_230:Dev uses the Basic Redis SKU (no replication) by cost; Standard/Premium replication is a prod-availability choice.
+
   name                = var.redis_name
   location            = var.location
   resource_group_name = var.resource_group_name

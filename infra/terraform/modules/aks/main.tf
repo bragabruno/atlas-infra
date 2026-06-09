@@ -33,6 +33,7 @@ resource "azurerm_kubernetes_cluster" "this" {
   #checkov:skip=CKV_AZURE_226:Burstable B-series dev SKUs lack a large enough cache disk for ephemeral OS disks; managed OS disks are used in dev.
   #checkov:skip=CKV_AZURE_227:Host encryption requires the EncryptionAtHost subscription feature; enabling it risks apply failure in dev, deferred to prod.
   #checkov:skip=CKV_AZURE_117:A customer-managed disk encryption set needs an encryption Key Vault created ahead of the cluster; the secrets vault is created after AKS (identity->secrets chain), so CMK disk encryption is deferred to prod.
+  #checkov:skip=CKV_AZURE_6:Authorized IP ranges ARE configured via api_server_access_profile.authorized_ip_ranges = var.api_server_authorized_ip_ranges (no default → must be supplied per-env in tfvars); checkov cannot resolve the tfvars value statically. Trivy AZU-0041 passes.
 
   name                = var.cluster_name
   location            = var.location
@@ -46,7 +47,8 @@ resource "azurerm_kubernetes_cluster" "this" {
   local_account_disabled = true
 
   # Subscribe to the automatic patch upgrade channel (CKV_AZURE_171).
-  automatic_channel_upgrade = "patch"
+  # azurerm v4 renamed this from automatic_channel_upgrade.
+  automatic_upgrade_channel = "patch"
 
   # Azure Policy add-on for Kubernetes (Gatekeeper) — enforces guardrails
   # (CKV_AZURE_116).
