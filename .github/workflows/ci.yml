@@ -121,3 +121,13 @@ jobs:
           printf '{"args":["--no-sandbox"]}' > /tmp/puppeteer.json
           export PUPPETEER_CONFIG=/tmp/puppeteer.json
           ./scripts/validate_diagrams.sh docs/diagrams
+
+  compose:
+    name: Gate 1e — compose config (scripts/compose.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 (2026-01-09)
+      # ubuntu-latest ships the docker compose v2 CLI; compose.sh runs
+      # `docker compose config` only (no images pulled, no containers started).
+      - name: Validate local dev-loop compose (ADR-023 / INF-17)
+        run: ./scripts/compose.sh
