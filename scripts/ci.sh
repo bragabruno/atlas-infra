@@ -18,4 +18,5 @@ scripts/lint.sh
 scripts/test.sh
 scripts/infra.sh
 scripts/security.sh
+scripts/compose.sh
 log_ok "CI passed ($(( $(date +%s) - start ))s)"

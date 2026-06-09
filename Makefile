@@ -31,7 +31,7 @@ TF_BACKEND_CONT ?= tfstate
 TF_VARS_FILE    ?= $(TF_DIR)/terraform.tfvars
 
 .PHONY: help \
-        lint test infra security build coverage docker ci local \
+        lint test infra security build coverage docker compose ci local \
         tf-init tf-plan tf-apply tf-destroy \
         full-up full-down destroy \
         cloud-up cloud-down platform-up platform-down \
@@ -112,6 +112,9 @@ coverage: ## N/A (no unit-test suite) — clean skip
 
 docker: ## N/A (no Dockerfile) — clean skip
 	@./scripts/docker.sh
+
+compose: ## validate the local dev-loop compose file (docker compose config)
+	@./scripts/compose.sh
 
 ci: ## Run the full build gate — what CI runs
 	@./scripts/ci.sh
