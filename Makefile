@@ -36,7 +36,7 @@ TF_VARS_FILE    ?= $(TF_DIR)/terraform.tfvars
         full-up full-down destroy \
         cloud-up cloud-down platform-up platform-down \
         otel-up otel-down mlflow-up mlflow-down \
-        qdrant-up kafka-up es-up \
+        qdrant-up kafka-up es-up local-up local-down \
         context-check acr-login
 
 # ---------------------------------------------------------------------------
@@ -345,3 +345,14 @@ mlflow-up: context-check
 
 mlflow-down: context-check
 	helm uninstall atlas-mlflow -n $(NAMESPACE) --ignore-not-found
+
+# ---------------------------------------------------------------------------
+# local-up / local-down — optional offline docker-compose dev loop (ADR-023)
+# Free local equivalents for paid services; no Azure/kube context needed.
+# See local/README.md and atlas-docs/research/local-mock-stack.md.
+# ---------------------------------------------------------------------------
+local-up: ## start the offline docker-compose dev loop (build + detached)
+	docker compose -f local/compose.dev.yaml up --build -d
+
+local-down: ## stop the offline dev loop and remove its volumes
+	docker compose -f local/compose.dev.yaml down -v
