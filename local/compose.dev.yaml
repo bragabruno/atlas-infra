@@ -108,6 +108,9 @@ services:
       ATLAS_REDIS_URL: redis://valkey:6379
       ATLAS_CACHE_ENABLED: "true"
       ATLAS_RATE_LIMIT_ENABLED: "true"
+      # Allow the frontend SPA (host browser at :8080) to call the gateway
+      # cross-origin (config-gated CORS — atlas-gateway).
+      ATLAS_CORS_ALLOW_ORIGINS: '["http://localhost:8080"]'
       # No provider keys set → gateway serves model=mock (MockProvider, ADR-012).
       OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5081
     ports: ["8000:8000"]

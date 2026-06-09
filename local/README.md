@@ -38,10 +38,11 @@ out next to `atlas-infra/` — the build contexts are `../../atlas-*`.
 
 ## Known caveats / follow-ups
 
-- **Frontend → gateway CORS.** The SPA runs in the host browser and calls the
-  gateway cross-origin at `http://localhost:8000` (set in `frontend-config.json`).
-  The gateway must allow CORS for `http://localhost:8080`. If chat calls are
-  blocked, that's the cause — add a CORS allowance to the gateway dev config.
+- **Frontend → gateway CORS (wired).** The SPA runs in the host browser and
+  calls the gateway cross-origin at `http://localhost:8000` (set in
+  `frontend-config.json`). The compose sets `ATLAS_CORS_ALLOW_ORIGINS` on the
+  gateway to allow `http://localhost:8080`, so chat calls work once the gateway's
+  config-gated CORS support is merged (atlas-gateway).
 - **`atlas-agent-runtime` is not included** — it has no HTTP surface yet
   (ADR-020's `POST /v1/agent/runs` is unimplemented). It joins the stack once
   that surface lands.
