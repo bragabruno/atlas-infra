@@ -1,0 +1,167 @@
+# Atlas optional local OFFLINE dev loop (ADR-023).
+#
+# Free local equivalents for every paid service, so Atlas runs end-to-end on a
+# laptop at zero cloud cost. Image tags are pinned and clear the 14-day
+# supply-chain floor (atlas-docs/02 §2); full mapping + caveats in
+# atlas-docs/research/local-mock-stack.md.
+#
+# NOT a production mirror: does NOT reproduce CMK, private endpoints, Workload
+# Identity, TLS-only paths, or network ACLs. Use the AKS dev loop (§4.3) for
+# infrastructure/security validation; use this for functional development.
+#
+# Usage (from atlas-infra/):  make local-up   /   make local-down
+# Host ports: gateway 8000 · mcp-doc-search 8081 · mcp-citations 8082 · frontend 8080
+#             qdrant 6333 · opensearch 9200 · postgres 5432 · valkey 6379
+#             mlflow 5000 · openobserve 5080 · azurite 10000-2 · lowkey-vault 8443
+# Deferred: atlas-agent-runtime — no HTTP surface yet (ADR-020 unimplemented).
+
+name: atlas-local
+
+services:
+  # ─── Backends — free local equivalents ──────────────────────────────────
+  postgres:
+    image: postgres:16.8
+    environment:
+      POSTGRES_DB: atlas
+      POSTGRES_USER: atlas
+      POSTGRES_PASSWORD: atlas # local-only dev credential; not a secret
+    ports: ["5432:5432"]
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  valkey:
+    image: valkey/valkey:8.0
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.17.1
+    ports: ["6333:6333", "6334:6334"]
+    volumes: ["qdrant-data:/qdrant/storage"]
+
+  opensearch:
+    image: opensearchproject/opensearch:3.6.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true" # local-only: plain HTTP on :9200
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: Atlas-local-9200 # required by entrypoint
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports: ["9200:9200"]
+    volumes: ["opensearch-data:/usr/share/opensearch/data"]
+
+  redpanda:
+    image: redpandadata/redpanda:v25.1.1
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports: ["9092:9092"]
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    command: ["azurite", "--blobHost", "0.0.0.0", "--queueHost", "0.0.0.0", "--tableHost", "0.0.0.0"]
+    ports: ["10000:10000", "10001:10001", "10002:10002"]
+    volumes: ["azurite-data:/data"]
+
+  lowkey-vault:
+    image: nagyesta/lowkey-vault:3.6.1
+    ports: ["8443:8443"]
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.12.0
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+    ports: ["5000:5000"]
+    volumes: ["mlflow-data:/mlflow"]
+
+  openobserve:
+    image: openobserve/openobserve:v0.14.4
+    environment:
+      ZO_ROOT_USER_EMAIL: dev@atlas.local
+      ZO_ROOT_USER_PASSWORD: Atlas-local-5080 # local-only dev credential
+    ports: ["5080:5080", "5081:5081"]
+    volumes: ["o2-data:/data"]
+
+  # ─── Atlas services — built from sibling repos ───────────────────────────
+  gateway:
+    build:
+      context: ../../atlas-gateway
+    environment:
+      ATLAS_API_KEYS: '["dev-key"]'
+      ATLAS_REDIS_URL: redis://valkey:6379
+      ATLAS_CACHE_ENABLED: "true"
+      ATLAS_RATE_LIMIT_ENABLED: "true"
+      # No provider keys set → gateway serves model=mock (MockProvider, ADR-012).
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5081
+    ports: ["8000:8000"]
+    depends_on:
+      valkey:
+        condition: service_healthy
+
+  mcp-doc-search:
+    build:
+      context: ../../atlas-mcp-doc-search
+    environment:
+      ELASTICSEARCH_URL: http://opensearch:9200
+      QDRANT_URL: http://qdrant:6333
+      ATLAS_GATEWAY_URL: http://gateway:8000
+      ATLAS_GATEWAY_API_KEY: dev-key
+    ports: ["8081:8000"]
+    depends_on:
+      gateway:
+        condition: service_started
+      qdrant:
+        condition: service_started
+      opensearch:
+        condition: service_started
+
+  mcp-citations:
+    build:
+      context: ../../atlas-mcp-citations
+    environment:
+      ELASTICSEARCH_URL: http://opensearch:9200
+      QDRANT_URL: http://qdrant:6333
+    ports: ["8082:8000"]
+    depends_on:
+      qdrant:
+        condition: service_started
+      opensearch:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ../../atlas-frontend
+    # The SPA runs in the host browser, so gatewayUrl must point at the
+    # host-mapped gateway port (localhost:8000), NOT the compose hostname.
+    # Requires gateway CORS for http://localhost:8080 — see local/README.md.
+    volumes:
+      - ./frontend-config.json:/usr/share/nginx/html/config.json:ro
+    ports: ["8080:8080"]
+    depends_on:
+      gateway:
+        condition: service_started
+
+volumes:
+  pg-data:
+  qdrant-data:
+  opensearch-data:
+  azurite-data:
+  mlflow-data:
+  o2-data:
