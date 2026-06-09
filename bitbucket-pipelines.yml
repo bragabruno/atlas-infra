@@ -17,7 +17,7 @@
 # (XCUT-4). Image tags are pinned exactly (atlas-docs/02 §2). Auth to Azure (if
 # ever needed) is OIDC; no secret values appear in this file.
 
-image: hashicorp/terraform:1.15.0  # Terraform 1.15.0 (2026-04-29)
+image: hashicorp/terraform:1.15.4  # Terraform 1.15.4 (2026-05-20); 1.15.0 had an azurerm partial-backend validate regression
 
 definitions:
   caches:
