@@ -1,3 +1,5 @@
 {
-  "gatewayUrl": "http://localhost:8000"
+  "gatewayUrl": "http://localhost:8090",
+  "bearerToken": "dev-key",
+  "defaultModel": "mock"
 }
