@@ -122,8 +122,18 @@ services:
       # Allow the frontend SPA (host browser at :8080) to call the gateway
       # cross-origin (config-gated CORS — atlas-gateway).
       ATLAS_CORS_ALLOW_ORIGINS: '["http://localhost:8080"]'
-      # No provider keys set → gateway serves model=mock (MockProvider, ADR-012).
+      # Route real inference to a local Ollama (OpenAI-compatible, no API key,
+      # free). The gateway runs in-container, so it reaches the host's Ollama via
+      # host.docker.internal (see extra_hosts). With these unset the gateway
+      # falls back to model=mock (MockProvider, ADR-012). Models must be pulled
+      # in Ollama (`ollama list`); adjust ATLAS_OLLAMA_MODELS to taste.
+      ATLAS_OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
+      ATLAS_OLLAMA_MODELS: '["gpt-oss:120b-cloud","kimi-k2.5:cloud","deepseek-v3.1:671b-cloud","qwen3-coder:480b-cloud"]'
       OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5081
+    # Reach the host's Ollama (127.0.0.1:11434 on the host) from inside the
+    # container. Automatic on Docker Desktop; host-gateway makes it work on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # Host 8090 (not 8000): :8000 is commonly taken by a local mcp-proxy. The
     # SPA reaches the gateway at host localhost:8090 (frontend-config.json);
     # in-cluster callers still use http://gateway:8000. CORS origin stays the

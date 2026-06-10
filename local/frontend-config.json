@@ -1,5 +1,5 @@
 {
   "gatewayUrl": "http://localhost:8090",
   "bearerToken": "dev-key",
-  "defaultModel": "mock"
+  "defaultModel": "gpt-oss:120b-cloud"
 }
