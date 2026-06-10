@@ -1,0 +1,90 @@
+###############################################################################
+# POL-5 — Nightly drift-eval CronJob with webhook alerting
+#
+# Runs atlas-prompts/scripts/nightly_drift_eval.py every night at 02:00 UTC.
+# When any prompt version regresses beyond ATLAS_DRIFT_ALERT_PCT the script
+# exits non-zero and the alerter POSTs to ATLAS_DRIFT_WEBHOOK_URL.
+#
+# Prerequisites:
+#   - Docker image: bragabruno/atlas-prompts:<tag>  (built from atlas-prompts)
+#   - Secrets: drift-eval-secrets K8s Secret (see below)
+#   - MLflow reachable at MLFLOW_TRACKING_URI within the cluster
+#
+# Apply:
+#   kubectl apply -f platform/drift-eval/drift-eval-cronjob.yaml -n atlas-prod
+###############################################################################
+
+# ---------------------------------------------------------------------------
+# Secret (values supplied out-of-band via Key Vault CSI or kubectl apply)
+# ---------------------------------------------------------------------------
+
+# Example:
+#   kubectl create secret generic drift-eval-secrets \
+#     --from-literal=kafka-bootstrap=kafka.atlas-prod.svc:9092 \
+#     --from-literal=mlflow-uri=http://mlflow.atlas-prod.svc:5000 \
+#     --from-literal=webhook-url=https://hooks.example.com/atlas-alerts \
+#     -n atlas-prod
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: atlas-drift-eval
+  namespace: atlas-prod
+  labels:
+    app.kubernetes.io/name: atlas-drift-eval
+    app.kubernetes.io/part-of: atlas
+    app.kubernetes.io/component: eval
+spec:
+  schedule: "0 2 * * *"          # 02:00 UTC nightly
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid       # skip if previous run still in progress
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1             # one retry on transient failures
+      activeDeadlineSeconds: 1800 # hard kill after 30 min
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: atlas-drift-eval
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: drift-eval
+              image: bragabruno/atlas-prompts:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - scripts/nightly_drift_eval.py
+              env:
+                - name: ATLAS_KAFKA_BOOTSTRAP
+                  valueFrom:
+                    secretKeyRef:
+                      name: drift-eval-secrets
+                      key: kafka-bootstrap
+                - name: MLFLOW_TRACKING_URI
+                  valueFrom:
+                    secretKeyRef:
+                      name: drift-eval-secrets
+                      key: mlflow-uri
+                - name: ATLAS_DRIFT_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: drift-eval-secrets
+                      key: webhook-url
+                      optional: true    # alert fires to log if webhook not set
+                - name: ATLAS_DRIFT_ALERT_PCT
+                  value: "10.0"
+                - name: ATLAS_SHADOW_LIMIT
+                  value: "2000"
+                - name: ATLAS_DRIFT_EXPERIMENT
+                  value: "atlas-drift"
+              resources:
+                requests:
+                  cpu: "250m"
+                  memory: "256Mi"
+                limits:
+                  cpu: "1"
+                  memory: "512Mi"
