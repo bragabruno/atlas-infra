@@ -1,0 +1,179 @@
+{
+  "version": 2,
+  "title": "Atlas LLM Gateway — Overview",
+  "description": "Cost, latency, cache, guardrails, agent loop-depth, and eval score trends. Data from OTel→Splunk (INF-13). POL-4.",
+  "layout": {
+    "type": "grid",
+    "globalInputs": [
+      {
+        "input.timerange": {
+          "token": "global_time",
+          "label": "Time range",
+          "type": "input.timerange",
+          "defaultValue": {
+            "earliest": "-24h@h",
+            "latest": "now"
+          }
+        }
+      }
+    ],
+    "structure": [
+      {"item": "viz_cost_per_model",      "type": "block", "position": {"x": 0,  "y": 0,  "w": 12, "h": 4}},
+      {"item": "viz_cost_per_app",        "type": "block", "position": {"x": 12, "y": 0,  "w": 12, "h": 4}},
+      {"item": "viz_latency_p50",         "type": "block", "position": {"x": 0,  "y": 4,  "w": 8,  "h": 4}},
+      {"item": "viz_latency_p95",         "type": "block", "position": {"x": 8,  "y": 4,  "w": 8,  "h": 4}},
+      {"item": "viz_latency_p99",         "type": "block", "position": {"x": 16, "y": 4,  "w": 8,  "h": 4}},
+      {"item": "viz_cache_hit_rate",      "type": "block", "position": {"x": 0,  "y": 8,  "w": 12, "h": 4}},
+      {"item": "viz_guardrail_rates",     "type": "block", "position": {"x": 12, "y": 8,  "w": 12, "h": 4}},
+      {"item": "viz_agent_loop_depth",    "type": "block", "position": {"x": 0,  "y": 12, "w": 12, "h": 4}},
+      {"item": "viz_eval_score_trends",   "type": "block", "position": {"x": 12, "y": 12, "w": 12, "h": 4}}
+    ]
+  },
+  "visualizations": {
+    "viz_cost_per_model": {
+      "type": "splunk.bar",
+      "title": "Cost (USD) per model / day",
+      "dataSources": {"primary": "ds_cost_per_model"},
+      "options": {
+        "xAxisTitleText": "Model",
+        "yAxisTitleText": "Total USD"
+      }
+    },
+    "viz_cost_per_app": {
+      "type": "splunk.bar",
+      "title": "Cost (USD) per app (tenant) / day",
+      "dataSources": {"primary": "ds_cost_per_app"},
+      "options": {
+        "xAxisTitleText": "Tenant",
+        "yAxisTitleText": "Total USD"
+      }
+    },
+    "viz_latency_p50": {
+      "type": "splunk.line",
+      "title": "Latency p50 by route (ms)",
+      "dataSources": {"primary": "ds_latency_p50"},
+      "options": {
+        "yAxisTitleText": "ms"
+      }
+    },
+    "viz_latency_p95": {
+      "type": "splunk.line",
+      "title": "Latency p95 by route (ms)",
+      "dataSources": {"primary": "ds_latency_p95"},
+      "options": {
+        "yAxisTitleText": "ms",
+        "seriesColors": ["#FF6B35"]
+      }
+    },
+    "viz_latency_p99": {
+      "type": "splunk.line",
+      "title": "Latency p99 by route (ms)",
+      "dataSources": {"primary": "ds_latency_p99"},
+      "options": {
+        "yAxisTitleText": "ms",
+        "seriesColors": ["#E63946"]
+      }
+    },
+    "viz_cache_hit_rate": {
+      "type": "splunk.area",
+      "title": "Semantic cache hit rate (%) by tenant",
+      "dataSources": {"primary": "ds_cache_hit_rate"},
+      "options": {
+        "yAxisTitleText": "Hit rate %",
+        "showDataLabels": false
+      }
+    },
+    "viz_guardrail_rates": {
+      "type": "splunk.bar",
+      "title": "Guardrail trigger rates — block vs pass",
+      "dataSources": {"primary": "ds_guardrail_rates"},
+      "options": {
+        "stackMode": "stacked100",
+        "xAxisTitleText": "Guardrail"
+      }
+    },
+    "viz_agent_loop_depth": {
+      "type": "splunk.histogram",
+      "title": "Agent loop iteration depth distribution",
+      "dataSources": {"primary": "ds_agent_loop_depth"},
+      "options": {
+        "xAxisTitleText": "Iterations",
+        "yAxisTitleText": "Runs"
+      }
+    },
+    "viz_eval_score_trends": {
+      "type": "splunk.line",
+      "title": "Eval score trends — pass_rate by prompt_version",
+      "dataSources": {"primary": "ds_eval_score_trends"},
+      "options": {
+        "yAxisTitleText": "Pass rate",
+        "yDomain": [0, 1]
+      }
+    }
+  },
+  "dataSources": {
+    "ds_cost_per_model": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats avg(atlas.accounting.cost_usd) as cost WHERE index=atlas_metrics span=1d by gen_ai.request.model | stats sum(cost) as total_usd by gen_ai.request.model | sort -total_usd",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_cost_per_app": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats avg(atlas.accounting.cost_usd) as cost WHERE index=atlas_metrics span=1d by tenant_id | stats sum(cost) as total_usd by tenant_id | sort -total_usd",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_latency_p50": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats p50(http.server.request.duration) as p50_ms WHERE index=atlas_metrics span=5m by http.route | timechart span=5m values(p50_ms) by http.route",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_latency_p95": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats p95(http.server.request.duration) as p95_ms WHERE index=atlas_metrics span=5m by http.route | timechart span=5m values(p95_ms) by http.route",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_latency_p99": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats p99(http.server.request.duration) as p99_ms WHERE index=atlas_metrics span=5m by http.route | timechart span=5m values(p99_ms) by http.route",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_cache_hit_rate": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats sum(atlas.cache.semantic.hits) as hits sum(atlas.cache.semantic.misses) as misses WHERE index=atlas_metrics span=5m by tenant_id | eval hit_rate=round(hits/(hits+misses)*100,1) | timechart span=5m values(hit_rate) by tenant_id",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_guardrail_rates": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats sum(atlas.guardrail.checks) as checks WHERE index=atlas_metrics by guardrail.name guardrail.outcome | eval outcome=if(guardrail.outcome==\"block\",\"block\",\"pass\") | stats sum(checks) as n by guardrail.name outcome",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_agent_loop_depth": {
+      "type": "ds.search",
+      "options": {
+        "query": "| mstats values(gen_ai.agent.iterations) as iterations WHERE index=atlas_metrics by run_id | stats count by iterations | sort iterations",
+        "queryParameters": {"earliest": "$global_time.earliest$", "latest": "$global_time.latest$"}
+      }
+    },
+    "ds_eval_score_trends": {
+      "type": "ds.search",
+      "options": {
+        "query": "index=atlas_mlflow source=mlflow metric=overall_pass_rate | timechart span=1d values(metric_value) by prompt_version",
+        "queryParameters": {"earliest": "-30d@d", "latest": "now"}
+      }
+    }
+  }
+}
