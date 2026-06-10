@@ -23,15 +23,16 @@ out next to `atlas-infra/` — the build contexts are `../../atlas-*`.
 
 | Service | Host URL | Notes |
 |---|---|---|
-| gateway | http://localhost:8000 | `model=mock` (no provider keys); cache + rate-limit on Valkey |
-| mcp-doc-search | http://localhost:8081 | wired to OpenSearch + Qdrant + gateway |
-| mcp-citations | http://localhost:8082 | wired to OpenSearch + Qdrant |
+| gateway | http://localhost:8090 | `model=mock` (no provider keys); cache + rate-limit on Valkey (host 8090 — :8000 often taken by a local mcp-proxy) |
+| mcp-doc-search | http://localhost:8081 | wired to OpenSearch + Qdrant + gateway (FastMCP `/mcp`) |
+| mcp-citations | http://localhost:8082 | wired to OpenSearch + Qdrant (FastMCP `/mcp`) |
+| agent-runtime | http://localhost:8083 | FastAPI trigger surface (AGT-16); persists runs to Postgres |
 | frontend | http://localhost:8080 | see CORS caveat below |
 | Qdrant | http://localhost:6333 | |
 | OpenSearch | http://localhost:9200 | security plugin disabled (local only) |
 | Postgres | localhost:5432 | `atlas`/`atlas`/`atlas` (local dev creds) |
 | Valkey | localhost:6379 | |
-| MLflow | http://localhost:5000 | SQLite backend |
+| MLflow | http://localhost:5500 | SQLite backend (host 5500 — :5000 collides with macOS AirPlay) |
 | OpenObserve | http://localhost:5080 | OTLP sink on :5081 (Splunk substitute) |
 | Azurite | localhost:10000-10002 | Blob/Queue/Table emulator |
 | lowkey-vault | https://localhost:8443 | Key Vault test double |
@@ -39,10 +40,11 @@ out next to `atlas-infra/` — the build contexts are `../../atlas-*`.
 ## Known caveats / follow-ups
 
 - **Frontend → gateway CORS (wired).** The SPA runs in the host browser and
-  calls the gateway cross-origin at `http://localhost:8000` (set in
+  calls the gateway cross-origin at `http://localhost:8090` (set in
   `frontend-config.json`). The compose sets `ATLAS_CORS_ALLOW_ORIGINS` on the
-  gateway to allow `http://localhost:8080`, so chat calls work once the gateway's
-  config-gated CORS support is merged (atlas-gateway).
+  gateway to allow `http://localhost:8080` (the SPA's own origin, unchanged by
+  the gateway host-port remap), so chat calls work with the gateway's
+  config-gated CORS support.
 - **`atlas-agent-runtime` is not included** — it has no HTTP surface yet
   (ADR-020's `POST /v1/agent/runs` is unimplemented). It joins the stack once
   that surface lands.

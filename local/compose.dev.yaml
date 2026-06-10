@@ -10,10 +10,14 @@
 # infrastructure/security validation; use this for functional development.
 #
 # Usage (from atlas-infra/):  make local-up   /   make local-down
-# Host ports: gateway 8000 · mcp-doc-search 8081 · mcp-citations 8082 · frontend 8080
+# Host ports: gateway 8090 · mcp-doc-search 8081 · mcp-citations 8082 · frontend 8080
+#             agent-runtime 8083
 #             qdrant 6333 · opensearch 9200 · postgres 5432 · valkey 6379
-#             mlflow 5000 · openobserve 5080 · azurite 10000-2 · lowkey-vault 8443
-# Deferred: atlas-agent-runtime — no HTTP surface yet (ADR-020 unimplemented).
+#             mlflow 5500 · openobserve 5080 · azurite 10000-2 · lowkey-vault 8443
+#             (mlflow on host 5500 — :5000 collides with macOS AirPlay Receiver)
+# Jobs profile (not started by `up`): drift-eval (atlas-prompts nightly batch).
+#   Run on demand:  docker compose -f local/compose.dev.yaml --profile jobs \
+#     run --rm drift-eval python scripts/nightly_drift_eval.py --source shadow.jsonl
 
 name: atlas-local
 
@@ -79,7 +83,7 @@ services:
     volumes: ["azurite-data:/data"]
 
   lowkey-vault:
-    image: nagyesta/lowkey-vault:3.6.1
+    image: nagyesta/lowkey-vault:7.2.18 # released 2026-05-11 (>14d); 3.6.1 never existed
     ports: ["8443:8443"]
 
   mlflow:
@@ -88,7 +92,9 @@ services:
       mlflow server --host 0.0.0.0 --port 5000
       --backend-store-uri sqlite:////mlflow/mlflow.db
       --default-artifact-root /mlflow/artifacts
-    ports: ["5000:5000"]
+    # Host 5500 (not 5000): macOS ControlCenter/AirPlay Receiver binds :5000.
+    # In-cluster access is unaffected (drift-eval uses http://mlflow:5000).
+    ports: ["5500:5000"]
     volumes: ["mlflow-data:/mlflow"]
 
   openobserve:
@@ -113,7 +119,11 @@ services:
       ATLAS_CORS_ALLOW_ORIGINS: '["http://localhost:8080"]'
       # No provider keys set → gateway serves model=mock (MockProvider, ADR-012).
       OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5081
-    ports: ["8000:8000"]
+    # Host 8090 (not 8000): :8000 is commonly taken by a local mcp-proxy. The
+    # SPA reaches the gateway at host localhost:8090 (frontend-config.json);
+    # in-cluster callers still use http://gateway:8000. CORS origin stays the
+    # frontend's :8080.
+    ports: ["8090:8000"]
     depends_on:
       valkey:
         condition: service_healthy
@@ -126,6 +136,9 @@ services:
       QDRANT_URL: http://qdrant:6333
       ATLAS_GATEWAY_URL: http://gateway:8000
       ATLAS_GATEWAY_API_KEY: dev-key
+      # FastMCP defaults to 127.0.0.1 inside the container — bind 0.0.0.0 so the
+      # published 8081:8000 port is reachable from the host.
+      FASTMCP_HOST: "0.0.0.0"
     ports: ["8081:8000"]
     depends_on:
       gateway:
@@ -141,6 +154,9 @@ services:
     environment:
       ELASTICSEARCH_URL: http://opensearch:9200
       QDRANT_URL: http://qdrant:6333
+      # FastMCP defaults to 127.0.0.1 inside the container — bind 0.0.0.0 so the
+      # published 8082:8000 port is reachable from the host.
+      FASTMCP_HOST: "0.0.0.0"
     ports: ["8082:8000"]
     depends_on:
       qdrant:
@@ -159,6 +175,41 @@ services:
     ports: ["8080:8080"]
     depends_on:
       gateway:
+        condition: service_started
+
+  agent-runtime:
+    build:
+      context: ../../atlas-agent-runtime
+    environment:
+      ATLAS_GATEWAY_URL: http://gateway:8000
+      ATLAS_GATEWAY_API_KEY: dev-key
+      # Persistence is config-gated; wiring the DSN enables GET /v1/agent/runs/{id}.
+      ATLAS_DATABASE_URL: postgresql+psycopg://atlas:atlas@postgres:5432/atlas
+      ATLAS_MCP_DOC_SEARCH_URL: http://mcp-doc-search:8000
+      ATLAS_MCP_CITATIONS_URL: http://mcp-citations:8000
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5081
+    ports: ["8083:8000"]
+    depends_on:
+      gateway:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  # ─── Jobs (profile-gated — never started by `up`) ────────────────────────
+  drift-eval:
+    build:
+      context: ../../atlas-prompts
+    profiles: ["jobs"]
+    environment:
+      ATLAS_KAFKA_BOOTSTRAP: redpanda:9092
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      ATLAS_DRIFT_EXPERIMENT: atlas-drift
+      ATLAS_DRIFT_ALERT_PCT: "10.0"
+      ATLAS_SHADOW_LIMIT: "1000"
+    depends_on:
+      redpanda:
+        condition: service_started
+      mlflow:
         condition: service_started
 
 volumes:
