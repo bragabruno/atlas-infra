@@ -82,8 +82,13 @@ services:
     ports: ["10000:10000", "10001:10001", "10002:10002"]
     volumes: ["azurite-data:/data"]
 
+  # Key Vault test double — published amd64-only, so it runs under emulation on
+  # Apple Silicon. No Atlas service consumes it (the dev gateway runs model=mock
+  # with no provider keys), so it's gated behind the `parity` profile and is NOT
+  # started by `up`. Run it explicitly with `--profile parity` if ever needed.
   lowkey-vault:
     image: nagyesta/lowkey-vault:7.2.18 # released 2026-05-11 (>14d); 3.6.1 never existed
+    profiles: ["parity"]
     ports: ["8443:8443"]
 
   mlflow:
