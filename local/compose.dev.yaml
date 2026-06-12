@@ -129,6 +129,13 @@ services:
       # in Ollama (`ollama list`); adjust ATLAS_OLLAMA_MODELS to taste.
       ATLAS_OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
       ATLAS_OLLAMA_MODELS: '["gpt-oss:120b-cloud","kimi-k2.5:cloud","deepseek-v3.1:671b-cloud","qwen3-coder:480b-cloud"]'
+      # Cost-trail endpoint (GET /v1/usage) — config-gated on this DSN (asyncpg
+      # style, no +psycopg). Run the gateway's alembic migration once so the
+      # call_records table exists (alembic wants its own sync DSN):
+      #   docker compose -f local/compose.dev.yaml exec \
+      #     -e ATLAS_DATABASE_URL=postgresql+psycopg://atlas:atlas@postgres:5432/atlas \
+      #     gateway alembic upgrade head
+      ATLAS_DB_URL: postgresql://atlas:atlas@postgres:5432/atlas
       OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5081
     # Reach the host's Ollama (127.0.0.1:11434 on the host) from inside the
     # container. Automatic on Docker Desktop; host-gateway makes it work on Linux.
@@ -141,6 +148,8 @@ services:
     ports: ["8090:8000"]
     depends_on:
       valkey:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   mcp-doc-search:
