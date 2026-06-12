@@ -219,6 +219,29 @@ services:
       postgres:
         condition: service_healthy
 
+  # ─── Dev UIs — browse the non-relational stores ──────────────────────────
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v3.7.3 # released 2026-05-20 (>14d)
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports: ["8086:8080"]
+    depends_on:
+      redpanda:
+        condition: service_started
+
+  redisinsight:
+    image: redis/redisinsight:3.4.2 # released 2026-04-22 (>14d)
+    # RI_* pre-registers the Valkey connection on first boot (ignored if unsupported).
+    environment:
+      RI_REDIS_HOST: valkey
+      RI_REDIS_PORT: "6379"
+      RI_REDIS_ALIAS: atlas-valkey
+    ports: ["5540:5540"]
+    volumes: ["redisinsight-data:/data"]
+    depends_on:
+      valkey:
+        condition: service_healthy
+
   # ─── Jobs (profile-gated — never started by `up`) ────────────────────────
   drift-eval:
     build:
@@ -243,3 +266,4 @@ volumes:
   azurite-data:
   mlflow-data:
   o2-data:
+  redisinsight-data:

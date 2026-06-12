@@ -33,6 +33,8 @@ out next to `atlas-infra/` — the build contexts are `../../atlas-*`.
 | Postgres | localhost:5432 | `atlas`/`atlas`/`atlas` (local dev creds) |
 | Valkey | localhost:6379 | |
 | MLflow | http://localhost:5500 | SQLite backend (host 5500 — :5000 collides with macOS AirPlay) |
+| Redpanda Console | http://localhost:8086 | Kafka UI — browse topics (e.g. `atlas.calls.v1`) |
+| RedisInsight | http://localhost:5540 | Valkey UI — connect to host `valkey`, port `6379` |
 | OpenObserve | http://localhost:5080 | OTLP sink on :5081 (Splunk substitute) |
 | Azurite | localhost:10000-10002 | Blob/Queue/Table emulator |
 | lowkey-vault | https://localhost:8443 | Key Vault test double |
