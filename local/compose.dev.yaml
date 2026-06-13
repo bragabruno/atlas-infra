@@ -12,7 +12,7 @@
 # Usage (from atlas-infra/):  make local-up   /   make local-down
 # Host ports: gateway 8090 · mcp-doc-search 8081 · mcp-citations 8082 · frontend 8080
 #             agent-runtime 8083
-#             qdrant 6333 · opensearch 9200 · postgres 5432 · valkey 6379
+#             qdrant 6333 · elasticsearch 9200 · postgres 5432 · valkey 6379
 #             mlflow 5500 · openobserve 5080 · azurite 10000-2 · lowkey-vault 8443
 #             (mlflow on host 5500 — :5000 collides with macOS AirPlay Receiver)
 # Jobs profile (not started by `up`): drift-eval (atlas-prompts nightly batch).
@@ -51,19 +51,23 @@ services:
     ports: ["6333:6333", "6334:6334"]
     volumes: ["qdrant-data:/qdrant/storage"]
 
-  opensearch:
-    image: opensearchproject/opensearch:3.6.0
+  # Real Elasticsearch (free basic license), replacing the earlier OpenSearch
+  # substitute: the pinned client (elasticsearch==9.4.0) hard-refuses
+  # OpenSearch (product check + vendored content types → 406), so the
+  # substitution could never serve the MCP search/ingest path. Matches prod
+  # (atlas-infra/platform/elasticsearch) and the client pin exactly.
+  elasticsearch:
+    image: elasticsearch:9.4.0 # released 2026-05-12 (>14d); matches client pin
     environment:
       discovery.type: single-node
-      DISABLE_SECURITY_PLUGIN: "true" # local-only: plain HTTP on :9200
-      OPENSEARCH_INITIAL_ADMIN_PASSWORD: Atlas-local-9200 # required by entrypoint
-      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      xpack.security.enabled: "false" # local-only: plain HTTP on :9200
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
     ulimits:
       memlock:
         soft: -1
         hard: -1
     ports: ["9200:9200"]
-    volumes: ["opensearch-data:/usr/share/opensearch/data"]
+    volumes: ["es-data:/usr/share/elasticsearch/data"]
 
   redpanda:
     image: redpandadata/redpanda:v25.1.1
@@ -136,6 +140,11 @@ services:
       #     -e ATLAS_DATABASE_URL=postgresql+psycopg://atlas:atlas@postgres:5432/atlas \
       #     gateway alembic upgrade head
       ATLAS_DB_URL: postgresql://atlas:atlas@postgres:5432/atlas
+      # Accounting (GW-14/15): every non-streaming completion writes a priced
+      # call_records row and emits an atlas.calls.v1 event to Redpanda — this
+      # is what fills /v1/usage and the Redpanda Console under load tests.
+      ATLAS_ACCOUNTING_ENABLED: "true"
+      ATLAS_KAFKA_BOOTSTRAP_SERVERS: redpanda:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5081
     # Reach the host's Ollama (127.0.0.1:11434 on the host) from inside the
     # container. Automatic on Docker Desktop; host-gateway makes it work on Linux.
@@ -151,12 +160,14 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      redpanda:
+        condition: service_started
 
   mcp-doc-search:
     build:
       context: ../../atlas-mcp-doc-search
     environment:
-      ELASTICSEARCH_URL: http://opensearch:9200
+      ELASTICSEARCH_URL: http://elasticsearch:9200
       QDRANT_URL: http://qdrant:6333
       ATLAS_GATEWAY_URL: http://gateway:8000
       ATLAS_GATEWAY_API_KEY: dev-key
@@ -169,14 +180,14 @@ services:
         condition: service_started
       qdrant:
         condition: service_started
-      opensearch:
+      elasticsearch:
         condition: service_started
 
   mcp-citations:
     build:
       context: ../../atlas-mcp-citations
     environment:
-      ELASTICSEARCH_URL: http://opensearch:9200
+      ELASTICSEARCH_URL: http://elasticsearch:9200
       QDRANT_URL: http://qdrant:6333
       # FastMCP defaults to 127.0.0.1 inside the container — bind 0.0.0.0 so the
       # published 8082:8000 port is reachable from the host.
@@ -185,7 +196,7 @@ services:
     depends_on:
       qdrant:
         condition: service_started
-      opensearch:
+      elasticsearch:
         condition: service_started
 
   frontend:
@@ -259,10 +270,48 @@ services:
       mlflow:
         condition: service_started
 
+  # Load generator (POL-6 successor): web UI at http://localhost:8089, or run
+  # headless:  docker compose -f local/compose.dev.yaml --profile loadtest \
+  #   run --rm locust -f /mnt/locust/locustfile.py --headless -u 20 -r 5 -t 60s
+  locust:
+    image: locustio/locust:2.44.0 # released 2026-05-11 (>14d)
+    profiles: ["loadtest"]
+    command: -f /mnt/locust/locustfile.py
+    environment:
+      # In-network targets (the locustfile reads these).
+      ATLAS_BASE: http://gateway:8000
+      ATLAS_AGENT: http://agent-runtime:8000
+      ATLAS_KEY: dev-key
+    volumes:
+      - ../../atlas-gateway/loadtest:/mnt/locust:ro
+    ports: ["8089:8089"]
+    depends_on:
+      gateway:
+        condition: service_started
+      agent-runtime:
+        condition: service_started
+
+  # One-shot DB seeder (reuses the gateway image — scripts ship in it):
+  #   docker compose -f local/compose.dev.yaml --profile jobs run --rm seed-db \
+  #     python scripts/seed_db.py --records 500 --kafka
+  seed-db:
+    build:
+      context: ../../atlas-gateway
+    profiles: ["jobs"]
+    environment:
+      ATLAS_SEED_DSN: postgresql://atlas:atlas@postgres:5432/atlas
+      ATLAS_KAFKA_BOOTSTRAP: redpanda:9092
+    entrypoint: ["python", "scripts/seed_db.py"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redpanda:
+        condition: service_started
+
 volumes:
   pg-data:
   qdrant-data:
-  opensearch-data:
+  es-data:
   azurite-data:
   mlflow-data:
   o2-data:

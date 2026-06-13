@@ -24,16 +24,17 @@ out next to `atlas-infra/` — the build contexts are `../../atlas-*`.
 | Service | Host URL | Notes |
 |---|---|---|
 | gateway | http://localhost:8090 | `model=mock` (no provider keys); cache + rate-limit on Valkey (host 8090 — :8000 often taken by a local mcp-proxy) |
-| mcp-doc-search | http://localhost:8081 | wired to OpenSearch + Qdrant + gateway (FastMCP `/mcp`) |
-| mcp-citations | http://localhost:8082 | wired to OpenSearch + Qdrant (FastMCP `/mcp`) |
+| mcp-doc-search | http://localhost:8081 | wired to Elasticsearch + Qdrant + gateway (FastMCP `/mcp`) |
+| mcp-citations | http://localhost:8082 | wired to Elasticsearch + Qdrant (FastMCP `/mcp`) |
 | agent-runtime | http://localhost:8083 | FastAPI trigger surface (AGT-16); persists runs to Postgres |
 | frontend | http://localhost:8080 | see CORS caveat below |
 | Qdrant | http://localhost:6333 | |
-| OpenSearch | http://localhost:9200 | security plugin disabled (local only) |
+| Elasticsearch | http://localhost:9200 | real ES 9.4.0 (free basic license), security disabled locally — the OpenSearch substitute was dropped: the pinned elasticsearch==9.4.0 client refuses OpenSearch |
 | Postgres | localhost:5432 | `atlas`/`atlas`/`atlas` (local dev creds) |
 | Valkey | localhost:6379 | |
 | MLflow | http://localhost:5500 | SQLite backend (host 5500 — :5000 collides with macOS AirPlay) |
 | Redpanda Console | http://localhost:8086 | Kafka UI — browse topics (e.g. `atlas.calls.v1`) |
+| Locust | http://localhost:8089 | load generator (`--profile loadtest`); accounting is ON locally, so mock chat traffic fills `call_records` + Kafka |
 | RedisInsight | http://localhost:5540 | Valkey UI — connect to host `valkey`, port `6379` |
 | OpenObserve | http://localhost:5080 | OTLP sink on :5081 (Splunk substitute) |
 | Azurite | localhost:10000-10002 | Blob/Queue/Table emulator |
