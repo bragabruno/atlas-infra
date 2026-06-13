@@ -171,6 +171,11 @@ services:
       QDRANT_URL: http://qdrant:6333
       ATLAS_GATEWAY_URL: http://gateway:8000
       ATLAS_GATEWAY_API_KEY: dev-key
+      # Embed queries with the mock model so doc_search works on the offline
+      # mock-only gateway AND matches the mock 8-dim vectors the corpus was
+      # ingested with (the seeders use ATLAS_EMBED_MODEL=mock). Without this the
+      # server defaults to the real `embed` alias, which the mock gateway 404s.
+      ATLAS_EMBED_MODEL: mock
       # FastMCP defaults to 127.0.0.1 inside the container — bind 0.0.0.0 so the
       # published 8081:8000 port is reachable from the host.
       FASTMCP_HOST: "0.0.0.0"
