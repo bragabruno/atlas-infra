@@ -30,7 +30,7 @@ out next to `atlas-infra/` — the build contexts are `../../atlas-*`.
 | frontend | http://localhost:8080 | see CORS caveat below |
 | Qdrant | http://localhost:6333 | |
 | Elasticsearch | http://localhost:9200 | real ES 9.4.0 (free basic license), security disabled locally — the OpenSearch substitute was dropped: the pinned elasticsearch==9.4.0 client refuses OpenSearch |
-| Postgres | localhost:5432 | `atlas`/`atlas`/`atlas` (local dev creds) |
+| Postgres | localhost:5432 | `atlas`/`atlas`/`atlas` (superuser — migrations + seeding). The gateway *runtime* connects as the non-superuser `atlas_app` so the BRA-887 RLS policies on `call_records`/`budgets` apply; `atlas_app` is created on fresh DB init (`local/initdb/`) — recreate with `down -v` on an existing volume. |
 | Valkey | localhost:6379 | |
 | MLflow | http://localhost:5500 | SQLite backend (host 5500 — :5000 collides with macOS AirPlay) |
 | Redpanda Console | http://localhost:8086 | Kafka UI — browse topics (e.g. `atlas.calls.v1`) |

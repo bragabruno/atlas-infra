@@ -30,7 +30,11 @@ services:
       POSTGRES_USER: atlas
       POSTGRES_PASSWORD: atlas # local-only dev credential; not a secret
     ports: ["5432:5432"]
-    volumes: ["pg-data:/var/lib/postgresql/data"]
+    volumes:
+      - "pg-data:/var/lib/postgresql/data"
+      # BRA-887: create the non-superuser `atlas_app` role (RLS-subject) the
+      # gateway runtime connects as. Runs once on a fresh data volume.
+      - "./initdb:/docker-entrypoint-initdb.d:ro"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
       interval: 10s
@@ -134,12 +138,15 @@ services:
       ATLAS_OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
       ATLAS_OLLAMA_MODELS: '["gpt-oss:120b-cloud","kimi-k2.5:cloud","deepseek-v3.1:671b-cloud","qwen3-coder:480b-cloud"]'
       # Cost-trail endpoint (GET /v1/usage) — config-gated on this DSN (asyncpg
-      # style, no +psycopg). Run the gateway's alembic migration once so the
-      # call_records table exists (alembic wants its own sync DSN):
+      # style, no +psycopg). The runtime connects as the non-superuser `atlas_app`
+      # role (BRA-887) so the RLS policies on call_records/budgets apply; the
+      # superuser `atlas` is reserved for migrations + seeding (both must bypass
+      # RLS). Run the migration once, AS `atlas`, so the tables + RLS exist
+      # (alembic wants its own sync DSN):
       #   docker compose -f local/compose.dev.yaml exec \
       #     -e ATLAS_DATABASE_URL=postgresql+psycopg://atlas:atlas@postgres:5432/atlas \
       #     gateway alembic upgrade head
-      ATLAS_DB_URL: postgresql://atlas:atlas@postgres:5432/atlas
+      ATLAS_DB_URL: postgresql://atlas_app:atlas_app@postgres:5432/atlas
       # Accounting (GW-14/15): every non-streaming completion writes a priced
       # call_records row and emits an atlas.calls.v1 event to Redpanda — this
       # is what fills /v1/usage and the Redpanda Console under load tests.
