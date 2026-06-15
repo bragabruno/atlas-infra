@@ -33,7 +33,10 @@ services:
     volumes:
       - "pg-data:/var/lib/postgresql/data"
       # BRA-887: create the non-superuser `atlas_app` role (RLS-subject) the
-      # gateway runtime connects as. Runs once on a fresh data volume.
+      # gateway runtime connects as. Runs once on a fresh data volume. The path
+      # resolves relative to THIS compose file's directory (local/) — same base
+      # as the `build context: ../../atlas-*` paths above — so `make local-up`
+      # and `docker compose -f local/compose.dev.yaml up` both find local/initdb.
       - "./initdb:/docker-entrypoint-initdb.d:ro"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U atlas -d atlas"]
